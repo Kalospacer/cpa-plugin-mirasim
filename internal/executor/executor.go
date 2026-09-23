@@ -16,6 +16,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/credentials"
 	"github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/mirasim"
 	thinkingpkg "github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/thinking"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 var SupportedFormats = []string{
@@ -251,6 +253,9 @@ func buildProviderRequest(req pluginapi.ExecutorRequest, stream bool, shape thin
 	if errTranslate != nil {
 		return nil, providerRoute{}, errTranslate
 	}
+	if wire == sdktranslator.FormatCodex {
+		body = keepCallerParallelToolCalls(payload, body)
+	}
 	body, errNormalize := normalizeBody(body, model, stream, wire)
 	if errNormalize != nil {
 		return nil, providerRoute{}, errNormalize
@@ -315,6 +320,36 @@ func translateRequest(from, to sdktranslator.Format, model string, body []byte, 
 		return nil, fmt.Errorf("Mirasim executor cannot translate request %s -> %s", from, to)
 	}
 	return registry.TranslateRequest(from, to, model, body, stream), nil
+}
+
+// keepCallerParallelToolCalls restores the caller's parallel_tool_calls value
+// after the Responses-to-Codex translation.
+//
+// That translation is written for the first-party Codex backend, which requires
+// parallel_tool_calls to be true, so it rewrites any other value. Mirasim's
+// relay takes the opposite view of the requests this plugin sends: a body
+// carrying the Codex Responses-Lite marker or an input-level additional_tools
+// item is refused with unsupported_value unless parallel_tool_calls is
+// explicitly false. Codex ships exactly that body and states false, so the
+// caller's own value is what the relay expects and is not this plugin's to
+// overwrite. A caller that says nothing keeps saying nothing.
+func keepCallerParallelToolCalls(source, translated []byte) []byte {
+	value := gjson.GetBytes(source, "parallel_tool_calls")
+	if !value.Exists() {
+		updated, errDelete := sjson.DeleteBytes(translated, "parallel_tool_calls")
+		if errDelete != nil {
+			return translated
+		}
+		return updated
+	}
+	if value.Type != gjson.True && value.Type != gjson.False {
+		return translated
+	}
+	updated, errSet := sjson.SetBytes(translated, "parallel_tool_calls", value.Bool())
+	if errSet != nil {
+		return translated
+	}
+	return updated
 }
 
 func translateNonStream(ctx context.Context, from, to sdktranslator.Format, model string, originalRequest, translatedRequest, body []byte) ([]byte, error) {
