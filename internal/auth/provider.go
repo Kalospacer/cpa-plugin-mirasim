@@ -16,6 +16,9 @@ type Provider struct {
 	settings pluginconfig.Settings
 	pool     *mirasim.Pool
 	oauth    *oauthCoordinator
+	// prompter overrides the process-wide stdin reader that serves interactive
+	// login prompts. Only tests set it.
+	prompter *stdinPrompter
 }
 
 const refreshTimeout = 60 * time.Second
@@ -118,7 +121,7 @@ func (p *Provider) ExecuteCommandLine(ctx context.Context, req pluginapi.Command
 	if email := flagString(req.Flags, "mirasim-login-email"); email != "" {
 		auth, stdout, errLogin = p.runEmailLogin(ctx, settings, email, flagString(req.Flags, "mirasim-login-code"), req.Host.ProxyURL)
 	} else {
-		auth, stdout, errLogin = p.runLocalLogin(ctx, settings, flagString(req.Flags, "mirasim-login-provider"), req.Host.ProxyURL, flagBoolValue(req.Flags, "no-browser"))
+		auth, stdout, errLogin = p.runLocalLogin(ctx, settings, flagStringSet(req.Flags, "mirasim-login-provider"), req.Host.ProxyURL, flagBoolValue(req.Flags, "no-browser"))
 	}
 	if errLogin != nil {
 		return pluginapi.CommandLineExecutionResponse{Stdout: stdout, Stderr: []byte(errLogin.Error() + "\n"), ExitCode: 1}, nil
@@ -185,6 +188,16 @@ func flagBool(flags map[string]pluginapi.CommandLineFlagValue, name string) bool
 func flagString(flags map[string]pluginapi.CommandLineFlagValue, name string) string {
 	value, ok := flags[name]
 	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value.Value)
+}
+
+// flagStringSet reports a flag only when the operator actually passed it, so the
+// flag's own registered default does not shadow the configured oauth-login-provider.
+func flagStringSet(flags map[string]pluginapi.CommandLineFlagValue, name string) string {
+	value, ok := flags[name]
+	if !ok || !value.Set {
 		return ""
 	}
 	return strings.TrimSpace(value.Value)

@@ -44,7 +44,7 @@ func (p *Provider) runEmailLogin(ctx context.Context, settings pluginconfig.Sett
 		notice := []byte("Mirasim sent a sign-in code to " + email + ".\n")
 		_, _ = os.Stdout.Write(notice)
 		stdout = append(stdout, notice...)
-		entered, errPrompt := promptForEmailCode(ctx)
+		entered, errPrompt := p.promptForEmailCode(ctx)
 		if errPrompt != nil {
 			return pluginapi.AuthData{}, stdout, errPrompt
 		}
@@ -166,19 +166,34 @@ func adminErrorDetail(raw []byte) string {
 	return detail
 }
 
-func promptForEmailCode(ctx context.Context) (string, error) {
-	input, errRead := asyncPrompt("Enter the Mirasim sign-in code: ")
+// promptForEmailCode shares the process's single stdin reader with the OAuth
+// paste prompt: two readers over os.Stdin would each buffer, and whichever read
+// first would swallow input meant for the other.
+func (p *Provider) promptForEmailCode(ctx context.Context) (string, error) {
+	requests := p.promptRequests()
+	reply := make(chan stdinReply)
+	// abandoned tells the shared reader this prompt has stopped waiting, so a code
+	// typed after a cancellation or a timeout is kept for the next prompt instead
+	// of being dropped into a channel nobody is reading.
+	abandoned := make(chan struct{})
+	defer close(abandoned)
 	timer := time.NewTimer(emailCodeEntryTTL)
 	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case <-timer.C:
-		return "", fmt.Errorf("Mirasim email sign-in timed out waiting for the code")
-	case value := <-input:
-		return value, nil
-	case err := <-errRead:
-		return "", err
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-timer.C:
+			return "", fmt.Errorf("Mirasim email sign-in timed out waiting for the code")
+		case requests <- stdinRequest{kind: promptEmailCode, reply: reply, done: abandoned}:
+			requests = nil
+			_, _ = os.Stdout.Write([]byte("Enter the Mirasim sign-in code: "))
+		case value := <-reply:
+			if value.err != nil && value.line == "" {
+				return "", value.err
+			}
+			return value.line, nil
+		}
 	}
 }
 

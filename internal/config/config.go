@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -11,6 +12,9 @@ const (
 	DefaultRelayURL      = "https://relay.mirasim.ai"
 	DefaultAdminURL      = "https://auth.mirasim.ai"
 	DefaultClientVersion = "0.0.336"
+	// DefaultOAuthLoginProvider is the Mirasim sign-in provider used when neither
+	// the login caller nor the configuration names one.
+	DefaultOAuthLoginProvider = "github"
 )
 
 // Settings contains public provider and OAuth callback defaults. Credential
@@ -21,9 +25,14 @@ type Settings struct {
 	RelayURL      string `yaml:"relay-url"`
 	AdminURL      string `yaml:"admin-url"`
 	ClientVersion string `yaml:"client-version"`
-	// OAuthPublicBaseURL is the externally reachable CPA origin used for the
-	// browser callback. It is intentionally not persisted in auth records.
-	OAuthPublicBaseURL string `yaml:"oauth-public-base-url"`
+	// OAuthLoginProvider names the Mirasim sign-in provider used for browser login
+	// when the caller does not request one.
+	OAuthLoginProvider string `yaml:"oauth-login-provider"`
+	// OAuthCallbackPort pins the loopback port that receives the Mirasim OAuth
+	// callback, so a remote deployment can reach it over an SSH tunnel. Empty or
+	// out of range takes an ephemeral port. Held as text because YAML may quote it
+	// and the environment override is text either way.
+	OAuthCallbackPort string `yaml:"oauth-callback-port"`
 	// HTTP1Only asks the host transport to skip HTTP/2 negotiation for relay
 	// calls. On by default: the official client offers only http/1.1 in its TLS
 	// ALPN, even though the relay itself will negotiate h2 when offered it.
@@ -39,6 +48,63 @@ type rootConfig struct {
 	Plugins struct {
 		Configs map[string]Settings `yaml:"configs"`
 	} `yaml:"plugins"`
+}
+
+// deprecatedKeys names configuration keys that have been removed, each paired
+// with the setting that supersedes it. Nothing reads these keys: they carry no
+// yaml tag on Settings and no environment binding, and they are listed here
+// only so that a configuration still carrying one can be reported to the
+// operator. CPA does not check plugin configuration keys against the fields a
+// plugin declares and YAML ignores a key nothing reads, so without this table a
+// stale configuration loads silently.
+var deprecatedKeys = []struct{ key, replacement string }{
+	{"oauth-public-base-url", "oauth-callback-port"},
+}
+
+// DeprecatedKeys reports which removed keys a configuration still carries, in a
+// stable order. It is pure: it reads no value, resolves no environment
+// override, and leaves Parse alone — a configuration this cannot parse simply
+// reports no deprecated keys, exactly as Parse falls back to defaults.
+func DeprecatedKeys(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var root map[string]any
+	if errUnmarshal := yaml.Unmarshal(raw, &root); errUnmarshal != nil {
+		return nil
+	}
+	section := pluginSection(root)
+	var found []string
+	for _, deprecated := range deprecatedKeys {
+		if _, ok := section[deprecated.key]; ok {
+			found = append(found, deprecated.key)
+		}
+	}
+	return found
+}
+
+// ReplacementFor names the setting that supersedes a removed key. Every key
+// DeprecatedKeys returns has one, because both come from the same table.
+func ReplacementFor(key string) string {
+	for _, deprecated := range deprecatedKeys {
+		if deprecated.key == key {
+			return deprecated.replacement
+		}
+	}
+	return ""
+}
+
+// pluginSection picks the mapping Parse would have read settings from: the
+// runtime subconfiguration under plugins.configs.mirasim when the host supplies
+// one, and otherwise the document root used by direct embedders.
+func pluginSection(root map[string]any) map[string]any {
+	plugins, _ := root["plugins"].(map[string]any)
+	configs, _ := plugins["configs"].(map[string]any)
+	if section, ok := configs["mirasim"]; ok {
+		mirasim, _ := section.(map[string]any)
+		return mirasim
+	}
+	return root
 }
 
 // Parse accepts both CLIProxyAPI's runtime plugin subconfiguration and the
@@ -78,8 +144,11 @@ func merge(settings, configured Settings) Settings {
 	if value := strings.TrimSpace(configured.ClientVersion); value != "" {
 		settings.ClientVersion = value
 	}
-	if value := cleanURL(configured.OAuthPublicBaseURL); value != "" {
-		settings.OAuthPublicBaseURL = value
+	if value := cleanProvider(configured.OAuthLoginProvider); value != "" {
+		settings.OAuthLoginProvider = value
+	}
+	if value := cleanPort(configured.OAuthCallbackPort); value != "" {
+		settings.OAuthCallbackPort = value
 	}
 	if configured.HTTP1Only != nil {
 		value := *configured.HTTP1Only
@@ -100,7 +169,8 @@ func Defaults() Settings {
 		RelayURL:              firstNonEmpty(cleanURL(os.Getenv("MIRASIM_RELAY_URL")), DefaultRelayURL),
 		AdminURL:              firstNonEmpty(cleanURL(os.Getenv("MIRASIM_ADMIN_URL")), DefaultAdminURL),
 		ClientVersion:         firstNonEmpty(strings.TrimSpace(os.Getenv("MIRASIM_CLIENT_VERSION")), DefaultClientVersion),
-		OAuthPublicBaseURL:    cleanURL(os.Getenv("MIRASIM_OAUTH_PUBLIC_BASE_URL")),
+		OAuthLoginProvider:    firstNonEmpty(cleanProvider(os.Getenv("MIRASIM_OAUTH_LOGIN_PROVIDER")), DefaultOAuthLoginProvider),
+		OAuthCallbackPort:     cleanPort(os.Getenv("MIRASIM_OAUTH_CALLBACK_PORT")),
 		HTTP1Only:             boolOrDefault(os.Getenv("MIRASIM_HTTP1_ONLY"), true),
 		LowercaseRelayHeaders: boolOrDefault(os.Getenv("MIRASIM_LOWERCASE_RELAY_HEADERS"), true),
 	}
@@ -129,6 +199,21 @@ func optionalBool(value string) *bool {
 
 func cleanURL(value string) string {
 	return strings.TrimRight(strings.TrimSpace(value), "/")
+}
+
+func cleanProvider(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// cleanPort keeps only a usable TCP port. Anything else, including an explicit 0
+// and a value out of range, is dropped so the loopback OAuth callback falls back
+// to an ephemeral port instead of failing to bind.
+func cleanPort(value string) string {
+	port, errParse := strconv.Atoi(strings.TrimSpace(value))
+	if errParse != nil || port < 1 || port > 65535 {
+		return ""
+	}
+	return strconv.Itoa(port)
 }
 
 func firstNonEmpty(values ...string) string {

@@ -56,14 +56,48 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	pluginconfig "github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/config"
 	mirasimplugin "github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/plugin"
 )
 
 var abiState = struct {
 	sync.RWMutex
-	host   *C.cliproxy_host_api
-	plugin *mirasimplugin.MirasimPlugin
+	host      *C.cliproxy_host_api
+	callbacks hostCallbackTable
+	plugin    *mirasimplugin.MirasimPlugin
 }{}
+
+// hostCallbackTable records which of the host's callback pointers the loader
+// actually supplied. callHost dereferences both api->call and api->free_buffer,
+// and across the cgo boundary a nil function pointer is not a Go panic that
+// unwinds into an error — it is a jump to address zero that takes the whole CPA
+// process down. Both are therefore checked before the first dereference, in
+// callHost, which is the single funnel every one of its six callers goes
+// through.
+//
+// The two pointers are recorded here, in Go, at the moment the table is
+// installed, because cgo cannot be used from a test file: this record is what
+// makes a host that supplies call without free_buffer reachable from a test at
+// all. The live pointers are still checked in callHost as well — that check is
+// the one standing between us and the jump, this one is the one that can be
+// proven.
+type hostCallbackTable struct {
+	call       bool
+	freeBuffer bool
+}
+
+// missing names the callback the host left out, or "" when the table is whole.
+// An empty table reports call: no host has been installed, which from this side
+// of the ABI is the same answer.
+func (t hostCallbackTable) missing() string {
+	switch {
+	case !t.call:
+		return "call"
+	case !t.freeBuffer:
+		return "free_buffer"
+	}
+	return ""
+}
 
 type abiLifecycleRequest struct {
 	ConfigYAML []byte `json:"config_yaml"`
@@ -138,24 +172,6 @@ type abiQuotaResetRequest struct {
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
-type abiManagementRegistration struct {
-	Routes    []abiManagementRoute `json:"routes,omitempty"`
-	Resources []abiResourceRoute   `json:"resources,omitempty"`
-}
-
-type abiManagementRoute struct {
-	Method      string `json:"Method"`
-	Path        string `json:"Path"`
-	Menu        string `json:"Menu,omitempty"`
-	Description string `json:"Description,omitempty"`
-}
-
-type abiResourceRoute struct {
-	Path        string `json:"Path"`
-	Menu        string `json:"Menu,omitempty"`
-	Description string `json:"Description,omitempty"`
-}
-
 type abiExecutorStreamResponse struct {
 	Headers http.Header                     `json:"headers,omitempty"`
 	Chunks  []pluginapi.ExecutorStreamChunk `json:"chunks,omitempty"`
@@ -197,6 +213,15 @@ type abiHostStreamCloseRequest struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// abiHostLogRequest mirrors the host's rpcHostLogRequest. host_callback_id is
+// left off: registration has no callback context, and the host resolves an
+// empty id to its own fallback context.
+type abiHostLogRequest struct {
+	Level   string         `json:"level"`
+	Message string         `json:"message"`
+	Fields  map[string]any `json:"fields,omitempty"`
+}
+
 type abiEmptyResponse struct{}
 
 //export cliproxy_plugin_init
@@ -206,6 +231,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 	}
 	abiState.Lock()
 	abiState.host = host
+	abiState.callbacks = hostCallbackTable{call: host.call != nil, freeBuffer: host.free_buffer != nil}
 	abiState.Unlock()
 	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.MirasimPluginCall)
@@ -250,6 +276,7 @@ func MirasimPluginShutdown() {
 	abiState.Lock()
 	abiState.plugin = nil
 	abiState.host = nil
+	abiState.callbacks = hostCallbackTable{}
 	abiState.Unlock()
 }
 
@@ -384,23 +411,6 @@ func handleABIMethod(ctx context.Context, method string, request []byte) ([]byte
 		}
 		resp, errCall := p.ExecuteCommandLine(ctx, req)
 		return abiOKEnvelopeWithError(resp, errCall)
-	case pluginabi.MethodManagementRegister:
-		var req pluginapi.ManagementRegistrationRequest
-		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
-			return nil, errDecode
-		}
-		resp, errCall := p.RegisterManagement(ctx, req)
-		if errCall != nil {
-			return abiErrorEnvelopeFromError("plugin_error", errCall), nil
-		}
-		return abiOKEnvelope(toABIManagementRegistration(resp))
-	case pluginabi.MethodManagementHandle:
-		var req pluginapi.ManagementRequest
-		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
-			return nil, errDecode
-		}
-		resp, errCall := p.HandleManagement(ctx, req)
-		return abiOKEnvelopeWithError(resp, errCall)
 	case pluginabi.MethodQuotaDescribe:
 		var req pluginapi.QuotaDescribeRequest
 		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
@@ -436,6 +446,7 @@ func handleRegister(request []byte) ([]byte, error) {
 	if errDecode := json.Unmarshal(request, &req); errDecode != nil {
 		return nil, errDecode
 	}
+	warnDeprecatedConfigKeys(req.ConfigYAML)
 	built := mirasimplugin.Build(req.ConfigYAML)
 	built.Metadata.Version = pluginVersion
 	p, okPlugin := built.Capabilities.AuthProvider.(*mirasimplugin.MirasimPlugin)
@@ -463,6 +474,33 @@ func handleRegister(request []byte) ([]byte, error) {
 	})
 }
 
+// warnDeprecatedConfigKeys tells the operator, through the host's own log, that
+// their configuration still carries a key nothing reads. It runs on register
+// and on reconfigure, which is deliberate: the host logs a hot reload too, and
+// the warning belongs next to it. Build cannot report failure and a stale key
+// must not stop the plugin loading, so this is advisory only — the key names
+// and their replacements are the entire payload, and no configuration value
+// ever reaches the log.
+func warnDeprecatedConfigKeys(configYAML []byte) {
+	for _, key := range pluginconfig.DeprecatedKeys(configYAML) {
+		replacement := pluginconfig.ReplacementFor(key)
+		emitHostLog(
+			"warn",
+			fmt.Sprintf("mirasim: configuration key %q has been removed and is ignored; use %q instead", key, replacement),
+			map[string]any{"deprecated_key": key, "replacement": replacement},
+		)
+	}
+}
+
+// emitHostLog writes one line to the host's logger. It is a variable so a test
+// can observe the warning without a live host pointer. A failure is ignored on
+// purpose: a host that cannot log for us must still be able to register us.
+var emitHostLog = func(level, message string, fields map[string]any) {
+	_, _ = callHost[abiEmptyResponse](pluginabi.MethodHostLog, abiHostLogRequest{
+		Level: level, Message: message, Fields: fields,
+	})
+}
+
 func currentPlugin() (*mirasimplugin.MirasimPlugin, error) {
 	abiState.RLock()
 	defer abiState.RUnlock()
@@ -470,24 +508,6 @@ func currentPlugin() (*mirasimplugin.MirasimPlugin, error) {
 		return nil, fmt.Errorf("Mirasim plugin is not registered")
 	}
 	return abiState.plugin, nil
-}
-
-func toABIManagementRegistration(resp pluginapi.ManagementRegistrationResponse) abiManagementRegistration {
-	out := abiManagementRegistration{
-		Routes:    make([]abiManagementRoute, 0, len(resp.Routes)),
-		Resources: make([]abiResourceRoute, 0, len(resp.Resources)),
-	}
-	for _, route := range resp.Routes {
-		out.Routes = append(out.Routes, abiManagementRoute{
-			Method: route.Method, Path: route.Path, Menu: route.Menu, Description: route.Description,
-		})
-	}
-	for _, resource := range resp.Resources {
-		out.Resources = append(out.Resources, abiResourceRoute{
-			Path: resource.Path, Menu: resource.Menu, Description: resource.Description,
-		})
-	}
-	return out
 }
 
 type abiHostHTTPClient struct {
@@ -610,8 +630,16 @@ func callHost[T any](method string, request any) (T, error) {
 	var zero T
 	abiState.RLock()
 	host := abiState.host
+	callbacks := abiState.callbacks
 	abiState.RUnlock()
-	if host == nil || host.call == nil {
+	// Both pointers are checked, not just the one this call starts with: the
+	// response buffer is freed through api->free_buffer on the way out, so a
+	// host that supplied call alone would be called successfully and then
+	// dereferenced through a nil on the return path.
+	if unavailable := callbacks.missing(); unavailable != "" {
+		return zero, fmt.Errorf("host callback %s is unavailable", unavailable)
+	}
+	if host == nil || host.call == nil || host.free_buffer == nil {
 		return zero, fmt.Errorf("host callback is unavailable")
 	}
 	rawRequest, errMarshal := json.Marshal(request)

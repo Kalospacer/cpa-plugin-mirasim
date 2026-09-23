@@ -2,22 +2,24 @@ package auth
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	pluginconfig "github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/config"
 	"github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/mirasim"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strings"
-	"testing"
 )
 
-func TestDiscoveredProvidersControlChooserAndRedirect(t *testing.T) {
+func TestDiscoveredProvidersControlWhichLoginsMayStart(t *testing.T) {
 	body := `{"providers":["gitlab","google","google","../bad","<script>"]}`
 	status := 200
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/auth/oauth/providers" || r.Method != "GET" || r.Header.Get("Authorization") != "" {
-			t.Fatalf("bad request %s", r.URL)
+			t.Errorf("bad discovery request %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusNotFound)
+			return
 		}
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
@@ -26,38 +28,48 @@ func TestDiscoveredProvidersControlChooserAndRedirect(t *testing.T) {
 	settings := pluginconfig.Defaults()
 	settings.AdminURL = server.URL
 	p := New(settings, mirasim.NewPool())
-	p.ConfigureOAuthResourceBasePath("/v0/resource/plugins/mirasim")
-	start, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{BaseURL: "http://127.0.0.1:8317"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := url.Values{"state": []string{start.State}}
-	request := func() pluginapi.ManagementResponse {
-		r, e := p.HandleOAuthResource(context.Background(), pluginapi.ManagementRequest{Path: "/oauth/start", Query: q})
-		if e != nil {
-			t.Fatal(e)
+	t.Cleanup(func() { releaseLoginSessions(p) })
+
+	start := func(provider string) (pluginapi.AuthLoginStartResponse, error) {
+		// BaseURL is CPA's own /v0/management/oauth-callback. It is passed here to
+		// prove the plugin ignores it and never routes the callback through the host.
+		req := pluginapi.AuthLoginStartRequest{BaseURL: "http://127.0.0.1:8317/v0/management/oauth-callback"}
+		if provider != "" {
+			req.Metadata = map[string]any{"provider": provider}
 		}
-		return r
+		return p.StartLogin(context.Background(), req)
 	}
-	r := request()
-	if r.StatusCode != 200 || !strings.Contains(string(r.Body), "gitlab") || strings.Contains(string(r.Body), "GitHub") || strings.Contains(string(r.Body), "<script>") {
-		t.Fatalf("chooser=%s", r.Body)
+
+	started, errStarted := start("gitlab")
+	if errStarted != nil {
+		t.Fatalf("discovered provider rejected: %v", errStarted)
 	}
-	q.Set("provider", "gitlab")
-	if request().StatusCode != 302 {
-		t.Fatal("discovered provider rejected")
+	if path := mustParseURL(t, started.URL).Path; path != "/auth/oauth/gitlab/login" {
+		t.Fatalf("authorize path = %q", path)
 	}
+
+	// github is only the configured default; discovery, not the default, decides.
+	_, errDefault := start("")
+	if errDefault == nil {
+		t.Fatal("undiscovered default provider accepted")
+	}
+	if !strings.Contains(errDefault.Error(), "gitlab, google") {
+		t.Fatalf("error = %v, want the offered set", errDefault)
+	}
+	if strings.Contains(errDefault.Error(), "bad") || strings.Contains(errDefault.Error(), "<script>") {
+		t.Fatalf("malformed discovery entry survived: %v", errDefault)
+	}
+
 	body = `{"providers":["google"]}`
-	if request().StatusCode != 400 {
+	if _, errDisabled := start("gitlab"); errDisabled == nil {
 		t.Fatal("disabled provider accepted")
 	}
-	q.Del("provider")
 	body = `{"providers":[]}`
-	if request().StatusCode != 503 {
-		t.Fatal("empty discovery used fallback")
+	if _, errEmpty := start("google"); errEmpty == nil {
+		t.Fatal("empty discovery used a fallback")
 	}
 	status = 500
-	if request().StatusCode != 503 {
-		t.Fatal("failed discovery used fallback")
+	if _, errFailed := start("google"); errFailed == nil {
+		t.Fatal("failed discovery used a fallback")
 	}
 }

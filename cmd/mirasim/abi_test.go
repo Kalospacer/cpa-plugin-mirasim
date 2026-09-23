@@ -6,13 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-func TestABIRegisterAndManagementRoute(t *testing.T) {
+func TestABIRegisterReportsCapabilities(t *testing.T) {
 	defer MirasimPluginShutdown()
 	raw, errRegister := handleABIMethod(context.Background(), pluginabi.MethodPluginRegister, []byte(`{"config_yaml":"cGx1Z2luczoge30K"}`))
 	if errRegister != nil {
@@ -29,8 +30,13 @@ func TestABIRegisterAndManagementRoute(t *testing.T) {
 	if errDecode := json.Unmarshal(envelope.Result, &registration); errDecode != nil {
 		t.Fatalf("decode registration: %v", errDecode)
 	}
-	if registration.SchemaVersion != pluginabi.SchemaVersion || !registration.Capabilities.ManagementAPI || !registration.Capabilities.Executor || !registration.Capabilities.ThinkingApplier || !registration.Capabilities.QuotaProvider {
+	if registration.SchemaVersion != pluginabi.SchemaVersion || !registration.Capabilities.Executor || !registration.Capabilities.ThinkingApplier || !registration.Capabilities.QuotaProvider {
 		t.Fatalf("registration = %#v", registration)
+	}
+	// The plugin registers no HTTP routes at all, so the host must never mount
+	// anything for it under the unauthenticated static-asset prefix.
+	if registration.Capabilities.ManagementAPI {
+		t.Fatalf("management_api = true, want false: %#v", registration.Capabilities)
 	}
 
 	raw, errThinking := handleABIMethod(context.Background(), pluginabi.MethodThinkingApply, []byte(`{"model":{"ID":"gpt-5.6-sol"},"config":{"Mode":"level","Level":"high"},"body":"e30="}`))
@@ -56,26 +62,6 @@ func TestABIRegisterAndManagementRoute(t *testing.T) {
 	// none of them and model.for_auth carries the catalog instead.
 	if modelResponse.Provider != "mirasim" || len(modelResponse.Models) != 0 {
 		t.Fatalf("static models = %#v", modelResponse)
-	}
-
-	raw, errManagement := handleABIMethod(context.Background(), pluginabi.MethodManagementRegister, []byte(`{}`))
-	if errManagement != nil {
-		t.Fatalf("management register error = %v", errManagement)
-	}
-	if errDecode := json.Unmarshal(raw, &envelope); errDecode != nil || !envelope.OK {
-		t.Fatalf("management envelope = %s, error = %v", raw, errDecode)
-	}
-	var management abiManagementRegistration
-	if errDecode := json.Unmarshal(envelope.Result, &management); errDecode != nil {
-		t.Fatalf("decode management registration: %v", errDecode)
-	}
-	// Limits are reported by the quota provider, so no authenticated route of
-	// our own is registered any more.
-	if len(management.Routes) != 0 {
-		t.Fatalf("management routes = %#v", management.Routes)
-	}
-	if len(management.Resources) != 2 || management.Resources[0].Path != "/oauth/start" || management.Resources[1].Path != "/oauth/callback" {
-		t.Fatalf("management resources = %#v", management.Resources)
 	}
 }
 
@@ -133,16 +119,188 @@ func TestABIUnknownMethodReturnsErrorEnvelope(t *testing.T) {
 	if _, errRegister := handleABIMethod(context.Background(), pluginabi.MethodPluginRegister, []byte(`{}`)); errRegister != nil {
 		t.Fatal(errRegister)
 	}
-	raw, errCall := handleABIMethod(context.Background(), "unknown.method", nil)
-	if errCall != nil {
-		t.Fatalf("unknown method returned transport error: %v", errCall)
+	// The retired management methods must fall through to the same envelope as
+	// any other unknown method: a host that still calls them gets an answer
+	// rather than a crashed plugin.
+	for _, method := range []string{"unknown.method", pluginabi.MethodManagementRegister, pluginabi.MethodManagementHandle} {
+		raw, errCall := handleABIMethod(context.Background(), method, nil)
+		if errCall != nil {
+			t.Fatalf("%s returned transport error: %v", method, errCall)
+		}
+		var envelope pluginabi.Envelope
+		if errDecode := json.Unmarshal(raw, &envelope); errDecode != nil {
+			t.Fatal(errDecode)
+		}
+		if envelope.OK || envelope.Error == nil || envelope.Error.Code != "unknown_method" {
+			t.Fatalf("%s envelope = %s", method, raw)
+		}
 	}
-	var envelope pluginabi.Envelope
-	if errDecode := json.Unmarshal(raw, &envelope); errDecode != nil {
-		t.Fatal(errDecode)
+}
+
+type capturedHostLog struct {
+	level   string
+	message string
+	fields  map[string]any
+}
+
+// callHost frees the host's response buffer through api->free_buffer on its way
+// out, so a host that supplies call without free_buffer is not a call that
+// fails — it is a call that succeeds and then jumps to address zero on the
+// return path, inside the host's own process. Every callHost caller funnels
+// through the one guard, so the guard has to refuse the incomplete table before
+// the call rather than after it.
+//
+// cgo cannot be used from a test file, so the table the guard reads is asserted
+// here directly; the live pointers callHost also checks are the same two.
+func TestAnIncompleteHostCallbackTableIsRefusedBeforeTheCall(t *testing.T) {
+	defer MirasimPluginShutdown()
+	restore := abiState.callbacks
+	t.Cleanup(func() {
+		abiState.Lock()
+		abiState.callbacks = restore
+		abiState.Unlock()
+	})
+
+	for name, table := range map[string]hostCallbackTable{
+		"free_buffer missing": {call: true},
+		"call missing":        {freeBuffer: true},
+		"empty table":         {},
+	} {
+		abiState.Lock()
+		abiState.callbacks = table
+		abiState.Unlock()
+		_, errCall := callHost[abiEmptyResponse](pluginabi.MethodHostLog, abiHostLogRequest{Level: "warn", Message: "probe"})
+		if errCall == nil {
+			t.Fatalf("%s: callHost returned no error", name)
+		}
+		// The message has to name the pointer that was missing: "unavailable"
+		// alone is also what an uninstalled host returns, and a guard that
+		// stopped checking free_buffer would still produce that.
+		want := "call"
+		if table.call {
+			want = "free_buffer"
+		}
+		if errCall.Error() != "host callback "+want+" is unavailable" {
+			t.Fatalf("%s: error = %v, want the %s pointer named", name, errCall, want)
+		}
 	}
-	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "unknown_method" {
-		t.Fatalf("envelope = %s", raw)
+
+	// A whole table must not be refused by the same guard: with every pointer
+	// supplied the call proceeds to the host itself, which no test installs, and
+	// fails there instead.
+	abiState.Lock()
+	abiState.callbacks = hostCallbackTable{call: true, freeBuffer: true}
+	abiState.Unlock()
+	_, errWhole := callHost[abiEmptyResponse](pluginabi.MethodHostLog, abiHostLogRequest{Level: "warn", Message: "probe"})
+	if errWhole == nil || errWhole.Error() != "host callback is unavailable" {
+		t.Fatalf("whole table: error = %v, want the uninstalled-host error", errWhole)
+	}
+}
+
+// captureHostLog swaps the host log sink for one the test can read, and puts
+// the real one back afterwards.
+func captureHostLog(t *testing.T) *[]capturedHostLog {
+	t.Helper()
+	restore := emitHostLog
+	t.Cleanup(func() { emitHostLog = restore })
+	var lines []capturedHostLog
+	emitHostLog = func(level, message string, fields map[string]any) {
+		lines = append(lines, capturedHostLog{level: level, message: message, fields: fields})
+	}
+	return &lines
+}
+
+func lifecycleRequest(t *testing.T, configYAML string) []byte {
+	t.Helper()
+	raw, errMarshal := json.Marshal(abiLifecycleRequest{ConfigYAML: []byte(configYAML)})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	return raw
+}
+
+// A v1.1.x configuration still names a key nothing reads, and YAML ignores it
+// silently, so browser login fails by never completing. The host log is the
+// only runtime signal the operator gets, and it has to fire on a hot reload as
+// well as a cold start.
+func TestABIRegisterWarnsOnceAboutADeprecatedConfigKey(t *testing.T) {
+	defer MirasimPluginShutdown()
+	lines := captureHostLog(t)
+
+	const secret = "https://cpa.example.com/private-callback-origin"
+	request := lifecycleRequest(t, "plugins:\n  configs:\n    mirasim:\n"+
+		"      oauth-public-base-url: "+secret+"\n      relay-url: https://relay.example/\n")
+
+	for _, method := range []string{pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure} {
+		*lines = nil
+		raw, errCall := handleABIMethod(context.Background(), method, request)
+		if errCall != nil {
+			t.Fatalf("%s error = %v", method, errCall)
+		}
+		// The warning is advisory: a stale key must never stop the plugin loading,
+		// or a dead callback origin would take relay, executor, models and quota
+		// down with it.
+		var envelope pluginabi.Envelope
+		if errDecode := json.Unmarshal(raw, &envelope); errDecode != nil || !envelope.OK {
+			t.Fatalf("%s envelope = %s, error = %v", method, raw, errDecode)
+		}
+		if len(*lines) != 1 {
+			t.Fatalf("%s logged %d lines, want exactly 1: %#v", method, len(*lines), *lines)
+		}
+		line := (*lines)[0]
+		if line.level != "warn" {
+			t.Fatalf("level = %q, want warn", line.level)
+		}
+		// It must say which key is dead and which setting replaces it.
+		if !strings.Contains(line.message, "oauth-public-base-url") {
+			t.Fatalf("message does not name the dead key: %q", line.message)
+		}
+		if !strings.Contains(line.message, "oauth-callback-port") {
+			t.Fatalf("message does not name the replacement: %q", line.message)
+		}
+		if line.fields["deprecated_key"] != "oauth-public-base-url" || line.fields["replacement"] != "oauth-callback-port" {
+			t.Fatalf("fields = %#v", line.fields)
+		}
+		// Key names only. Nothing from the operator's configuration may reach the
+		// host log, so assert against the whole serialised line, not just the text.
+		serialised, errMarshal := json.Marshal(abiHostLogRequest{Level: line.level, Message: line.message, Fields: line.fields})
+		if errMarshal != nil {
+			t.Fatal(errMarshal)
+		}
+		for _, value := range []string{secret, "cpa.example.com", "relay.example"} {
+			if strings.Contains(string(serialised), value) {
+				t.Fatalf("%s leaked a configuration value %q: %s", method, value, serialised)
+			}
+		}
+	}
+}
+
+// Silence is the common case. A configuration that never carried the dead key
+// must produce no warning at all, on either lifecycle method.
+func TestABIRegisterStaysSilentOnACleanConfig(t *testing.T) {
+	defer MirasimPluginShutdown()
+	lines := captureHostLog(t)
+
+	for _, configYAML := range []string{
+		"",
+		"plugins:\n  configs:\n    mirasim:\n      relay-url: https://relay.example/\n      oauth-callback-port: 41111\n",
+		"relay-url: https://relay.example/\n",
+		"plugins: [",
+	} {
+		for _, method := range []string{pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure} {
+			*lines = nil
+			raw, errCall := handleABIMethod(context.Background(), method, lifecycleRequest(t, configYAML))
+			if errCall != nil {
+				t.Fatalf("%q via %s: error = %v", configYAML, method, errCall)
+			}
+			var envelope pluginabi.Envelope
+			if errDecode := json.Unmarshal(raw, &envelope); errDecode != nil || !envelope.OK {
+				t.Fatalf("%q via %s: envelope = %s, error = %v", configYAML, method, raw, errDecode)
+			}
+			if len(*lines) != 0 {
+				t.Fatalf("%q via %s logged %#v, want silence", configYAML, method, *lines)
+			}
+		}
 	}
 }
 

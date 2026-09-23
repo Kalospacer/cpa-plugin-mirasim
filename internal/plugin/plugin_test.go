@@ -12,8 +12,13 @@ func TestBuildDeclaresProviderCapabilities(t *testing.T) {
 		t.Fatalf("metadata = %#v", built.Metadata)
 	}
 	caps := built.Capabilities
-	if caps.AuthProvider == nil || caps.ModelProvider == nil || caps.Executor == nil || caps.ThinkingApplier == nil || caps.CommandLinePlugin == nil || caps.ManagementAPI == nil || caps.QuotaProvider == nil {
+	if caps.AuthProvider == nil || caps.ModelProvider == nil || caps.Executor == nil || caps.ThinkingApplier == nil || caps.CommandLinePlugin == nil || caps.QuotaProvider == nil {
 		t.Fatalf("capabilities are incomplete: %#v", caps)
+	}
+	// The plugin owns no HTTP route surface: claiming the Management API is what
+	// put routes under the unauthenticated static-asset prefix the store rejects.
+	if caps.ManagementAPI != nil {
+		t.Fatalf("plugin still claims the Management API: %#v", caps.ManagementAPI)
 	}
 	if caps.ExecutorModelScope != pluginapi.ExecutorModelScopeOAuth {
 		t.Fatalf("executor scope = %q", caps.ExecutorModelScope)
