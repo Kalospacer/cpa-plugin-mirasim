@@ -67,6 +67,12 @@ func (e *Executor) Execute(ctx context.Context, req pluginapi.ExecutorRequest) (
 		}
 	}
 	outputFormat := responseFormat(req)
+	// CLIProxyAPI's Claude -> OpenAI non-streaming transformer parses its input
+	// as an SSE document; the relay answers a non-streaming request with a plain
+	// JSON message, so reshape it into the event sequence the transformer reads.
+	if route.Format == sdktranslator.FormatClaude && outputFormat != sdktranslator.FormatClaude {
+		upstreamPayload = claudeMessageAsSSE(upstreamPayload)
+	}
 	payload, errTranslate := translateNonStream(ctx, route.Format, outputFormat, normalizeModel(req.Model), req.OriginalRequest, requestBody, upstreamPayload)
 	if errTranslate != nil {
 		return pluginapi.ExecutorResponse{}, errTranslate
