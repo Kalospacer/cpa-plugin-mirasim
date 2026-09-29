@@ -28,6 +28,10 @@ type executorHostClient struct {
 	do func(context.Context, pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error)
 }
 
+// executorTestClientVersion stands in for the version a credential reports, so
+// tests exercise the same attribution block a real request carries.
+const executorTestClientVersion = "0.0.354"
+
 func (c executorHostClient) Do(ctx context.Context, req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
 	return c.do(ctx, req)
 }
@@ -109,7 +113,7 @@ func TestBuildProviderRequestRoutesByModelAndClientProtocol(t *testing.T) {
 				SourceFormat: test.format.String(),
 				Format:       test.format.String(),
 				Payload:      []byte(test.payload),
-			}, false, thinkingpkg.ShapeUnknown)
+			}, false, thinkingpkg.ShapeUnknown, executorTestClientVersion)
 			if errBuild != nil {
 				t.Fatalf("buildProviderRequest() error = %v", errBuild)
 			}
@@ -135,7 +139,7 @@ func TestClaudeNormalizationPreservesOutputConfig(t *testing.T) {
 		Model:        "claude-sonnet-5",
 		SourceFormat: sdktranslator.FormatClaude.String(),
 		Payload:      []byte(`{"model":"claude-sonnet-5","max_tokens":64,"messages":[{"role":"user","content":"hello"}],"output_config":{"effort":"high","format":{"type":"json_schema"}}}`),
-	}, false, thinkingpkg.ShapeUnknown)
+	}, false, thinkingpkg.ShapeUnknown, executorTestClientVersion)
 	if errBuild != nil {
 		t.Fatalf("buildProviderRequest() error = %v", errBuild)
 	}
@@ -193,7 +197,7 @@ func TestBuildProviderRequestAppliesThinkingSuffixAfterTranslation(t *testing.T)
 				SourceFormat: test.format.String(),
 				Format:       test.format.String(),
 				Payload:      []byte(test.payload),
-			}, false, test.shape)
+			}, false, test.shape, executorTestClientVersion)
 			if errBuild != nil {
 				t.Fatal(errBuild)
 			}
@@ -218,7 +222,7 @@ func TestBuildProviderRequestRepairsClaudeThinkingWithoutASuffix(t *testing.T) {
 		Model:        "claude-sonnet-5",
 		SourceFormat: sdktranslator.FormatClaude.String(),
 		Payload:      []byte(`{"model":"claude-sonnet-5","max_tokens":32000,"messages":[{"role":"user","content":"hello"}],"thinking":{"type":"enabled","budget_tokens":10000}}`),
-	}, false, thinkingpkg.ShapeAdaptive)
+	}, false, thinkingpkg.ShapeAdaptive, executorTestClientVersion)
 	if errBuild != nil {
 		t.Fatal(errBuild)
 	}
@@ -235,7 +239,7 @@ func TestBuildProviderRequestAppliesClaudeEffort(t *testing.T) {
 		Model:        "claude-sonnet-5(low)",
 		SourceFormat: sdktranslator.FormatClaude.String(),
 		Payload:      []byte(`{"model":"claude-sonnet-5(low)","max_tokens":4096,"messages":[{"role":"user","content":"hello"}]}`),
-	}, false, thinkingpkg.ShapeUnknown)
+	}, false, thinkingpkg.ShapeUnknown, executorTestClientVersion)
 	if errBuild != nil || gjson.GetBytes(body, "thinking.type").String() != "adaptive" || gjson.GetBytes(body, "output_config.effort").String() != "low" {
 		t.Fatalf("body = %s, error = %v", body, errBuild)
 	}

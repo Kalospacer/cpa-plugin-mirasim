@@ -11,7 +11,7 @@ import (
 
 func TestLongContextSelectorWithThinking(t *testing.T) {
 	req := pluginapi.ExecutorRequest{Model: "mirasim/claude-sonnet-5[1m](high)", SourceFormat: "claude", Payload: []byte(`{"model":"claude-sonnet-5[1m]","max_tokens":4096,"messages":[]}`), Headers: http.Header{"Anthropic-Beta": []string{"other-beta"}}}
-	body, route, err := buildProviderRequest(req, false, thinkingpkg.ShapeUnknown)
+	body, route, err := buildProviderRequest(req, false, thinkingpkg.ShapeUnknown, executorTestClientVersion)
 	if err != nil || gjson.GetBytes(body, "model").String() != "claude-sonnet-5" || gjson.GetBytes(body, "output_config.effort").String() != "high" {
 		t.Fatalf("body=%s err=%v", body, err)
 	}

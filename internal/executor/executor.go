@@ -44,11 +44,11 @@ func (e *Executor) Execute(ctx context.Context, req pluginapi.ExecutorRequest) (
 	if req.Alt == "responses/compact" {
 		return e.executeCompact(ctx, req)
 	}
-	_, client, errClient := e.client(req.StorageJSON)
+	storage, client, errClient := e.client(req.StorageJSON)
 	if errClient != nil {
 		return pluginapi.ExecutorResponse{}, errClient
 	}
-	requestBody, route, errBuild := buildProviderRequest(req, false, claudeShape(client, req.Model))
+	requestBody, route, errBuild := buildProviderRequest(req, false, claudeShape(client, req.Model), storage.ClientVersion)
 	if errBuild != nil {
 		return pluginapi.ExecutorResponse{}, errBuild
 	}
@@ -87,11 +87,11 @@ func (e *Executor) ExecuteStream(ctx context.Context, req pluginapi.ExecutorRequ
 	if req.Alt == "responses/compact" {
 		return pluginapi.ExecutorStreamResponse{}, compactError("streaming is not supported for /responses/compact")
 	}
-	_, client, errClient := e.client(req.StorageJSON)
+	storage, client, errClient := e.client(req.StorageJSON)
 	if errClient != nil {
 		return pluginapi.ExecutorStreamResponse{}, errClient
 	}
-	requestBody, route, errBuild := buildProviderRequest(req, true, claudeShape(client, req.Model))
+	requestBody, route, errBuild := buildProviderRequest(req, true, claudeShape(client, req.Model), storage.ClientVersion)
 	if errBuild != nil {
 		return pluginapi.ExecutorStreamResponse{}, errBuild
 	}
@@ -156,7 +156,7 @@ func (e *Executor) CountTokens(ctx context.Context, req pluginapi.ExecutorReques
 }
 
 func (e *Executor) HttpRequest(ctx context.Context, req pluginapi.ExecutorHTTPRequest) (pluginapi.ExecutorHTTPResponse, error) {
-	_, client, errClient := e.client(req.StorageJSON)
+	storage, client, errClient := e.client(req.StorageJSON)
 	if errClient != nil {
 		return pluginapi.ExecutorHTTPResponse{}, errClient
 	}
@@ -183,6 +183,7 @@ func (e *Executor) HttpRequest(ctx context.Context, req pluginapi.ExecutorHTTPRe
 		if errParse != nil {
 			return pluginapi.ExecutorHTTPResponse{}, errParse
 		}
+		body = ensureClaudeAttributionSystem(body, model, storage.ClientVersion)
 	}
 	headers := cloneHeaders(req.Headers)
 	if strings.HasPrefix(relayPath, "/v1/messages") && thinkingpkg.ParseModel(modelFromJSON(req.Body)).LongContext {
@@ -247,7 +248,7 @@ func claudeShape(client *mirasim.Client, model string) thinkingpkg.ModelShape {
 	}
 }
 
-func buildProviderRequest(req pluginapi.ExecutorRequest, stream bool, shape thinkingpkg.ModelShape) ([]byte, providerRoute, error) {
+func buildProviderRequest(req pluginapi.ExecutorRequest, stream bool, shape thinkingpkg.ModelShape, clientVersion string) ([]byte, providerRoute, error) {
 	parsedModel := thinkingpkg.ParseModel(req.Model)
 	model := parsedModel.ModelName
 	source := sourceFormat(req)
@@ -279,6 +280,10 @@ func buildProviderRequest(req pluginapi.ExecutorRequest, stream bool, shape thin
 	if wire == sdktranslator.FormatClaude {
 		path = "/v1/messages"
 	}
+	// The relay's Claude mount refuses a body without the caller's billing
+	// attribution block, so it is added last, after every transformation that
+	// could rewrite or drop a system block.
+	body = ensureClaudeAttributionSystem(body, model, clientVersion)
 	return body, providerRoute{Format: wire, Path: path, Query: cloneValues(req.Query)}, nil
 }
 
