@@ -28,36 +28,48 @@ func TestDiscoveredProvidersControlWhichLoginsMayStart(t *testing.T) {
 	settings := pluginconfig.Defaults()
 	settings.AdminURL = server.URL
 	p := New(settings, mirasim.NewPool())
-	t.Cleanup(func() { releaseLoginSessions(p) })
+	if _, errRegister := p.RegisterManagement(context.Background(), pluginapi.ManagementRegistrationRequest{ResourceBasePath: testResourceBasePath}); errRegister != nil {
+		t.Fatal(errRegister)
+	}
 
 	start := func(provider string) (pluginapi.AuthLoginStartResponse, error) {
-		// BaseURL is CPA's own /v0/management/oauth-callback. It is passed here to
-		// prove the plugin ignores it and never routes the callback through the host.
-		req := pluginapi.AuthLoginStartRequest{BaseURL: "http://127.0.0.1:8317/v0/management/oauth-callback"}
 		if provider != "" {
-			req.Metadata = map[string]any{"provider": provider}
+			return p.StartLogin(context.Background(), startRequest(map[string]any{"provider": provider}))
 		}
-		return p.StartLogin(context.Background(), req)
+		return p.StartLogin(context.Background(), startRequest())
 	}
 
 	started, errStarted := start("gitlab")
 	if errStarted != nil {
 		t.Fatalf("discovered provider rejected: %v", errStarted)
 	}
-	if path := mustParseURL(t, started.URL).Path; path != "/auth/oauth/gitlab/login" {
+	if path := mustParseURL(t, authorizeURLOf(t, p, started)).Path; path != "/auth/oauth/gitlab/login" {
 		t.Fatalf("authorize path = %q", path)
 	}
 
-	// github is only the configured default; discovery, not the default, decides.
-	_, errDefault := start("")
-	if errDefault == nil {
-		t.Fatal("undiscovered default provider accepted")
+	// A rejected ?provider= names only the offered set; malformed discovery
+	// entries must never survive into the operator-facing error.
+	_, errUnsupported := start("github")
+	if errUnsupported == nil {
+		t.Fatal("unoffered provider accepted")
 	}
-	if !strings.Contains(errDefault.Error(), "gitlab, google") {
-		t.Fatalf("error = %v, want the offered set", errDefault)
+	message := errUnsupported.Error()
+	if !strings.Contains(message, "gitlab, google") {
+		t.Fatalf("error = %q, want the offered set", message)
 	}
-	if strings.Contains(errDefault.Error(), "bad") || strings.Contains(errDefault.Error(), "<script>") {
-		t.Fatalf("malformed discovery entry survived: %v", errDefault)
+	if strings.Contains(message, "bad") || strings.Contains(message, "<script>") {
+		t.Fatalf("malformed discovery entry survived into %q", message)
+	}
+
+	// github is only the configured default and discovery does not offer it, so
+	// the chooser keeps the login and marks nothing; the operator picks instead.
+	chooser, errDefault := start("")
+	if errDefault != nil {
+		t.Fatalf("undiscovered configured default broke the login: %v", errDefault)
+	}
+	links := startPageLinks(t, p, chooser)
+	if len(links) != 2 || links["gitlab"].isDefault || links["google"].isDefault {
+		t.Fatalf("offered buttons = %#v, want gitlab and google with no default", links)
 	}
 
 	body = `{"providers":["google"]}`

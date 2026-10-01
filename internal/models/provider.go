@@ -14,14 +14,23 @@ var fallbackModelIDs = []string{
 	"claude-fable-5",
 	"claude-fable-5-1",
 	"claude-haiku-4-5",
-	"claude-opus-4-6",
 	"claude-opus-4-8",
 	"claude-opus-5",
+	"claude-opus-5-5",
 	"claude-sonnet-5",
 	"gpt-6-astra",
+	"gpt-6-luna",
+	"gpt-6-sol",
 	"gpt-5.6-luna",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
+	"deepseek-flash",
+	"glm-5.3-flash",
+	"kimi-k3",
+}
+
+var imageModelIDs = []string{
+	"gpt-image-1.5", "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5",
 }
 
 type modelDefinition struct {
@@ -75,35 +84,69 @@ var modelDefinitions = map[string]modelDefinition{
 		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
 		thinking: adaptiveRelayThinking(), modelType: "claude", owner: "anthropic",
 	},
+	"claude-opus-5-5": {
+		displayName: "Claude Opus 5.5", context: 1000000, output: 128000,
+		description: "Anthropic premium agentic and reasoning model via Mirasim",
+		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
+		thinking: adaptiveRelayThinking(), modelType: "claude", owner: "anthropic",
+	},
 	"claude-sonnet-5": {
 		displayName: "Claude Sonnet 5", created: 1782777600, context: 1000000, output: 128000,
 		description: "Anthropic agentic Sonnet model for coding and tool use via Mirasim",
 		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
 		thinking: adaptiveRelayThinking(), modelType: "claude", owner: "anthropic",
 	},
-	// Context windows come from the catalog the official client falls back to
-	// when the relay publishes none, read out of the 0.0.336 build: Astra at
-	// 0xd4e40 and the GPT 5.6 models at 0x5ad20. Its model-picker list disagrees;
-	// the fallback catalog is the one that stands in for the relay's own table.
+	// Context windows come from the official 0.0.372 builtin agent catalog,
+	// the table used when the relay publishes none. Astra is 0x100590. GPT 6
+	// Sol, GPT 6 Luna and the GPT 5.6 models are 0xd4e40. The desktop
+	// model-picker list still shows the older 0.0.354 windows.
 	"gpt-6-astra": {
-		displayName: "GPT 6 Astra", version: "gpt-6", context: 872000, output: 128000,
+		displayName: "GPT 6 Astra", version: "gpt-6", context: 1050000, output: 128000,
 		description: "OpenAI GPT 6 Astra via Mirasim",
 		methods:     []string{"responses"}, parameters: []string{"tools", "thinking"}, thinking: codexThinking(), modelType: "openai", owner: "openai",
 	},
+	"gpt-6-luna": {
+		displayName: "GPT 6 Luna", version: "gpt-6", context: 872000, output: 128000,
+		description: "OpenAI GPT 6 Luna via Mirasim",
+		methods:     []string{"responses"}, parameters: []string{"tools", "thinking"}, thinking: codexThinking(), modelType: "openai", owner: "openai",
+	},
+	"gpt-6-sol": {
+		displayName: "GPT 6 Sol", version: "gpt-6", context: 872000, output: 128000,
+		description: "OpenAI GPT 6 Sol via Mirasim",
+		methods:     []string{"responses"}, parameters: []string{"tools", "thinking"}, thinking: codexThinking(), modelType: "openai", owner: "openai",
+	},
 	"gpt-5.6-luna": {
-		displayName: "GPT 5.6 Luna", version: "gpt-5.6", created: 1783616400, context: 372000, output: 128000,
+		displayName: "GPT 5.6 Luna", version: "gpt-5.6", created: 1783616400, context: 872000, output: 128000,
 		description: "Fast and affordable OpenAI agentic coding model via Mirasim",
 		methods:     []string{"responses"}, parameters: []string{"tools", "thinking"}, thinking: codexThinking(), modelType: "openai", owner: "openai",
 	},
 	"gpt-5.6-sol": {
-		displayName: "GPT 5.6 Sol", version: "gpt-5.6", created: 1783616400, context: 372000, output: 128000,
+		displayName: "GPT 5.6 Sol", version: "gpt-5.6", created: 1783616400, context: 872000, output: 128000,
 		description: "OpenAI frontier agentic coding model via Mirasim",
 		methods:     []string{"responses"}, parameters: []string{"tools", "thinking"}, thinking: codexThinking(), modelType: "openai", owner: "openai",
 	},
 	"gpt-5.6-terra": {
-		displayName: "GPT 5.6 Terra", version: "gpt-5.6", created: 1783616400, context: 372000, output: 128000,
+		displayName: "GPT 5.6 Terra", version: "gpt-5.6", created: 1783616400, context: 872000, output: 128000,
 		description: "Balanced OpenAI agentic coding model via Mirasim",
 		methods:     []string{"responses"}, parameters: []string{"tools", "thinking"}, thinking: codexThinking(), modelType: "openai", owner: "openai",
+	},
+	"deepseek-flash": {
+		displayName: "DeepSeek V4.1 Flash", context: 1000000, output: 384000,
+		description: "DeepSeek Flash via Mirasim",
+		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
+		thinking: &pluginapi.ThinkingSupport{ZeroAllowed: true, DynamicAllowed: true, Levels: []string{"off", "low", "high", "max"}}, modelType: "deepseek", owner: "deepseek",
+	},
+	"glm-5.3-flash": {
+		displayName: "GLM 5.3 Flash", context: 1000000,
+		description: "GLM 5.3 Flash via Mirasim",
+		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
+		thinking: &pluginapi.ThinkingSupport{DynamicAllowed: true, Levels: []string{"low", "high", "max"}}, modelType: "glm", owner: "z-ai",
+	},
+	"kimi-k3": {
+		displayName: "Kimi K3", context: 1048576,
+		description: "Kimi K3 via Mirasim",
+		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
+		thinking: &pluginapi.ThinkingSupport{DynamicAllowed: true, Levels: []string{"low", "high", "max"}}, modelType: "kimi", owner: "moonshot",
 	},
 }
 
@@ -132,15 +175,26 @@ func (p *Provider) ModelsForAuth(ctx context.Context, req pluginapi.AuthModelReq
 		return pluginapi.ModelResponse{}, errParse
 	}
 	if storage == nil {
-		return pluginapi.ModelResponse{Provider: credentials.Provider, Models: fallbackModels()}, nil
+		return pluginapi.ModelResponse{Provider: credentials.Provider, Models: withLongContextAliases(withImageAliases(fallbackModels()))}, nil
 	}
-	catalog, errCatalog := p.pool.Client(*storage).ListModels(ctx, req.HTTPClient)
-	if errCatalog != nil {
-		return pluginapi.ModelResponse{}, errCatalog
+	client := p.pool.Client(*storage)
+	catalog, errCatalog := client.ListModels(ctx, req.HTTPClient)
+	var models []pluginapi.ModelInfo
+	var roster mirasim.ModelRoster
+	if errCatalog == nil {
+		models = exposedModels(catalog.Models)
+		roster = client.ModelRoster(ctx, req.HTTPClient)
+	} else if cached := client.CachedModels(); len(cached) > 0 {
+		catalog.Models = cached
+		models = exposedModels(cached)
+		roster = client.CachedModelRoster()
+	} else {
+		models = fallbackModels()
+		roster = client.CachedModelRoster()
 	}
-	models := exposedModels(catalog.Models)
-	roster := p.pool.Client(*storage).ModelRoster(ctx, req.HTTPClient)
 	applyRoster(models, roster)
+	applyCatalogContexts(models, catalog.Models)
+	models = withImageAliases(models)
 	models = withLongContextAliases(models)
 	return pluginapi.ModelResponse{Provider: credentials.Provider, Models: models}, nil
 }
@@ -169,9 +223,29 @@ func exposedModels(catalog []mirasim.RemoteModel) []pluginapi.ModelInfo {
 	return models
 }
 
+// CPA's images handlers route these image selectors by model ID. The official
+// Codex proxy forwards them even though the text model picker omits them.
+func withImageAliases(models []pluginapi.ModelInfo) []pluginapi.ModelInfo {
+	seen := make(map[string]bool, len(models))
+	hasGPT := false
+	for _, model := range models {
+		id := strings.ToLower(model.ID)
+		seen[id] = true
+		hasGPT = hasGPT || strings.HasPrefix(id, "gpt-") && !strings.HasPrefix(id, "gpt-image-")
+	}
+	if !hasGPT {
+		return models
+	}
+	for _, id := range imageModelIDs {
+		if !seen[id] {
+			models = append(models, modelInfo(id, "model", 0, "openai"))
+		}
+	}
+	return models
+}
+
 // applyCatalogContext prefers the context window the account's own catalog
-// reports over the static fallback, which is only a snapshot of one inspected
-// client build. A signed roster still overrides both.
+// reports over both the signed roster and the static fallback.
 func applyCatalogContext(model *pluginapi.ModelInfo, contextWindow int64) {
 	if contextWindow <= 0 {
 		return
@@ -180,20 +254,36 @@ func applyCatalogContext(model *pluginapi.ModelInfo, contextWindow int64) {
 	model.InputTokenLimit = contextWindow
 }
 
-// isExposedModel keeps the families this plugin has a wire for: Claude goes to
-// Messages and GPT to Responses. The official client hides the other families
-// the relay lists from its own picker, so nothing servable is withheld here.
+// The desktop client uses a served max_input_tokens before roster metadata.
+// Reapply account-specific windows after the roster, before adding [1m] aliases.
+func applyCatalogContexts(models []pluginapi.ModelInfo, catalog []mirasim.RemoteModel) {
+	served := make(map[string]int64, len(catalog))
+	for _, remote := range catalog {
+		if remote.MaxInputTokens > 0 {
+			served[strings.ToLower(strings.TrimSpace(remote.ID))] = remote.MaxInputTokens
+		}
+	}
+	for i := range models {
+		applyCatalogContext(&models[i], served[strings.ToLower(models[i].ID)])
+	}
+}
+
+// GPT uses Responses; the other relay models use the Messages wire.
 func isExposedModel(id string) bool {
 	id = strings.ToLower(strings.TrimSpace(id))
 	if mirasim.PaidVariantModel(id) {
 		return false
 	}
-	return strings.HasPrefix(id, "claude-") || strings.HasPrefix(id, "gpt-")
+	return strings.HasPrefix(id, "claude-") || strings.HasPrefix(id, "gpt-") ||
+		strings.HasPrefix(id, "deepseek-") || strings.HasPrefix(id, "glm-") || strings.HasPrefix(id, "kimi-")
 }
 
 func modelInfo(id, object string, created int64, owner string) pluginapi.ModelInfo {
 	id = strings.TrimSpace(id)
 	definition, known := modelDefinitions[strings.ToLower(id)]
+	if !known {
+		definition = genericDefinition(id)
+	}
 	if object == "" {
 		object = "model"
 	}
@@ -206,10 +296,7 @@ func modelInfo(id, object string, created int64, owner string) pluginapi.ModelIn
 	if created == 0 {
 		created = definition.created
 	}
-	if !known {
-		definition = genericDefinition(id)
-	}
-	return pluginapi.ModelInfo{
+	model := pluginapi.ModelInfo{
 		ID:                         id,
 		Object:                     object,
 		Created:                    created,
@@ -229,12 +316,30 @@ func modelInfo(id, object string, created int64, owner string) pluginapi.ModelIn
 		SupportedOutputModalities:  []string{"text"},
 		Thinking:                   cloneThinking(definition.thinking),
 	}
+	if definition.modelType == "openai-image" {
+		model.SupportedInputModalities = []string{"text", "image"}
+		model.SupportedOutputModalities = []string{"image"}
+	}
+	return model
 }
 
 func genericDefinition(id string) modelDefinition {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(id)), "claude-") {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if strings.HasPrefix(id, "gpt-image-") {
+		return modelDefinition{modelType: "openai-image", methods: []string{"images/generations", "images/edits"}, owner: "openai"}
+	}
+	if strings.HasPrefix(id, "claude-") || strings.HasPrefix(id, "deepseek-") || strings.HasPrefix(id, "glm-") || strings.HasPrefix(id, "kimi-") {
+		modelType := "claude"
+		switch {
+		case strings.HasPrefix(id, "deepseek-"):
+			modelType = "deepseek"
+		case strings.HasPrefix(id, "glm-"):
+			modelType = "glm"
+		case strings.HasPrefix(id, "kimi-"):
+			modelType = "kimi"
+		}
 		return modelDefinition{
-			modelType: "claude", methods: []string{"messages", "countTokens"},
+			modelType: modelType, methods: []string{"messages", "countTokens"},
 			parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice"},
 		}
 	}

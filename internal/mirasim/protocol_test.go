@@ -100,13 +100,30 @@ func TestSignatureV2UsesBlankMetadataLineWhenMetadataIsEmpty(t *testing.T) {
 }
 
 func TestRelayAgentRecognizesCodexRoutes(t *testing.T) {
-	for _, requestPath := range []string{"/v1/responses", "/v1/alpha/search"} {
+	for _, requestPath := range []string{"/v1/responses", "/v1/alpha/search", "/v1/images/generations", "/v1/images/edits"} {
 		if got := relayAgent(requestPath); got != "codex" {
 			t.Fatalf("relayAgent(%q) = %q, want codex", requestPath, got)
 		}
 	}
 	if got := relayAgent("/v1/messages"); got != "claude" {
 		t.Fatalf("relayAgent(/v1/messages) = %q, want claude", got)
+	}
+}
+
+func TestRelayAgentMatchesOfficialBuiltinModelFamilies(t *testing.T) {
+	for model, want := range map[string]string{
+		"claude-sonnet-5": "claude",
+		"deepseek-flash":  "dsh",
+		"glm-5.3-flash":   "zcode",
+		"kimi-k3":         "kimi",
+	} {
+		body := []byte(`{"model":"` + model + `"}`)
+		if got := relayAgentForRequest("/v1/messages", body); got != want {
+			t.Errorf("model %s: agent = %s, want %s", model, got, want)
+		}
+	}
+	if got := relayAgentForRequest("/v1/responses", []byte(`{"model":"deepseek-flash"}`)); got != "codex" {
+		t.Fatalf("Responses route agent = %s", got)
 	}
 }
 

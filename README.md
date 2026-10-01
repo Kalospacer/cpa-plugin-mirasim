@@ -1,34 +1,25 @@
-# Mirasim Provider Plugin
+# Mirasim Provider
 
-A native [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin for Mirasim, with browser/CLI OAuth, automatic token refresh, dynamic models, streaming, tool calls, and quota reporting. Claude models use Messages; GPT models use Responses. CPA stores credentials in its configured `auth-dir`.
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 的 Mirasim 插件。用浏览器、命令行或邮箱验证码登录，凭证由 CPA 写进 `auth-dir` 并自动刷新。支持动态模型、流式输出、工具调用、图像接口和额度查询。
 
-## Requirements
+GPT 走 Responses。Claude、DeepSeek、GLM、Kimi 走 Messages。
 
-- CLIProxyAPI `v7.3.9` or a later plugin ABI/schema release. The plugin reports plugin schema 6, which a host older than `v7.3.0` refuses to load; stay on plugin `v0.7.x` to keep a `v7.2.x` host.
-- For source builds: Go 1.26+ and a C compiler supporting `c-shared`.
-- A private, persistent, writable CPA `auth-dir`.
+## 要求
 
-## Build
+- CLIProxyAPI **v7.2.155** 或更高，建议 **v7.2.159** 或更高。v7.2.154 及更早会拒绝加载。v7.2.159 起，管理中心的标准额度页可以画出 Mirasim 卡片；v7.2.155 到 v7.2.158 用插件自带的额度页和兼容接口。
+- `auth-dir` 必须可写，并且不要公开。访问令牌和私钥都在这里。
 
-Linux:
+## 安装
 
-```bash
-go test ./...
-go vet ./...
-go build -trimpath -buildmode=c-shared -o dist/mirasim.so ./cmd/mirasim
+先打开插件支持，再在管理中心的官方插件商店里安装并启用 Mirasim。官方商店是内置源，不用再添加 `store-sources`。
+
+```yaml
+plugins:
+  enabled: true
+  dir: plugins
 ```
 
-Windows PowerShell, with GCC on `PATH`:
-
-```powershell
-.\scripts\build.ps1 -Version 0.7.1
-```
-
-The Windows script runs tests and vet before producing `dist/mirasim.dll`. Generated `.h` files are not needed by CPA.
-
-## Install
-
-Copy the platform library into CPA's `plugins` directory and configure `config.yaml`:
+也可以从 [Releases](https://github.com/KIDA-MNESIA/cpa-plugin-mirasim/releases) 下载对应系统的压缩包。包内是单个 `mirasim.so`（Linux、FreeBSD）、`mirasim.dylib`（macOS）或 `mirasim.dll`（Windows）。放到 CPA 的 `plugins` 目录后写入：
 
 ```yaml
 plugins:
@@ -37,165 +28,114 @@ plugins:
   configs:
     mirasim:
       enabled: true
-      # Only needed when the browser and the CPA host are different machines.
-      oauth-callback-port: 18317
 ```
 
-Optional settings are `relay-url` (default `https://relay.mirasim.ai`), `admin-url` (default `https://auth.mirasim.ai`), `client-version` (default `0.0.336`), `oauth-login-provider` (default `github`), and `oauth-callback-port` (unset, meaning an ephemeral port). Explicit configuration overrides the corresponding `MIRASIM_RELAY_URL`, `MIRASIM_ADMIN_URL`, `MIRASIM_CLIENT_VERSION`, `MIRASIM_OAUTH_LOGIN_PROVIDER`, and `MIRASIM_OAUTH_CALLBACK_PORT` environment variables.
+发布覆盖 Linux、macOS、Windows 的 amd64 与 arm64，以及 FreeBSD amd64。
 
-Write `oauth-callback-port` as a plain number as shown; a quoted `"18317"` is accepted too, so a strict YAML linter cannot break the flow. A value outside 1-65535, including `0`, is ignored and an ephemeral port is used instead.
+从 v1.1.x 升级时删掉 `oauth-public-base-url`。留着只会多一条警告，其余配置和已保存的凭证继续有效。浏览器回调改走 CPA 自己的端口。
 
-Two further settings shape how relay calls appear on the wire, and both are on by default because they match the official desktop client. `http1-only` skips HTTP/2 negotiation: a packet capture of the 0.0.336 client shows it offering only `http/1.1` in its TLS ALPN, even though `relay.mirasim.ai` will negotiate `h2` when a client offers it — so Go's default transport would otherwise speak a protocol the real client never uses. `lowercase-relay-headers` puts header names on the wire in lower case instead of Go's canonical `X-Mirasim-Device` form, matching the client, which spells every header lower case and lower-cases them again before deciding what to seal; CPA implements this by rewriting the request line, so it also forces HTTP/1.1. Their environment defaults are `MIRASIM_HTTP1_ONLY` and `MIRASIM_LOWERCASE_RELAY_HEADERS`, and setting either to `false` restores Go's own behaviour. Neither changes what is signed.
+## 配置
 
-The running plugin configuration determines `client-version`, including when loading older OAuth files. Existing tokens and device keys remain valid inputs; CPA persists the updated version on its normal auth save/refresh path. Use `client-version` explicitly if an upstream needs a different version.
+配置写在 `plugins.configs.mirasim` 下。不写就用默认值。同一项同时出现在 YAML 和环境变量里时，以 YAML 为准。
 
-### Upgrading from v1.1.x
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `oauth-login-provider` | `github` | 登录页预先标出的方式，如 `github`、`google`。Mirasim 当前不提供该方式时不标默认，登录仍可继续。 |
+| `oauth-callback-port` | 随机端口 | 只用于命令行 `--mirasim-login`。写成 `18317` 或 `"18317"` 均可。超出 1 到 65535 时改回随机端口。 |
+| `collect` | 跟随上游 | `false` 时，推理请求带上官方客户端的关闭采集标记。这只是向中继提出的请求。 |
+| `locale` | 空 | 可选，如 `zh-CN`。 |
+| `relay-url` | `https://relay.mirasim.ai` | 一般不用改。 |
+| `admin-url` | `https://auth.mirasim.ai` | 一般不用改。 |
+| `client-version` | `0.0.372` | 上报的客户端版本。旧凭证在下次保存或刷新时改成这项的值。 |
 
-`oauth-public-base-url` is gone, along with the separate OAuth bridge binary that served its callback. Nothing reports this at startup: CPA does not check plugin configuration keys against the fields a plugin declares, and YAML ignores a key nothing reads, so a configuration carrying the old key still loads cleanly and every other setting in it keeps working. Only browser login is affected, and it fails by never completing rather than by returning an error.
+环境变量依次为 `MIRASIM_OAUTH_LOGIN_PROVIDER`、`MIRASIM_OAUTH_CALLBACK_PORT`、`MIRASIM_COLLECT`、`MIRASIM_LOCALE`、`MIRASIM_RELAY_URL`、`MIRASIM_ADMIN_URL`、`MIRASIM_CLIENT_VERSION`。
 
-If you set `oauth-public-base-url`, delete the key. What replaces it depends on where the browser runs rather than on whether the key was ever set: when the browser and the CPA host are on different machines, follow [Remote CPA hosts](#remote-cpa-hosts) to pin `oauth-callback-port` and forward it over SSH for the duration of a login. A host-local deployment needs no new setting whether or not it carried the old key — an unset port takes an ephemeral one — and `--mirasim-login`, `--mirasim-login-email` and stored credentials from v1.1.x are unaffected either way.
+`http1-only` 与 `lowercase-relay-headers` 默认开启，用来贴近官方桌面客户端的请求外形。设为 `false` 则改回 Go 的默认传输。对应 `MIRASIM_HTTP1_ONLY`、`MIRASIM_LOWERCASE_RELAY_HEADERS`。
 
-## OAuth login
+## 登录
 
-The plugin registers no HTTP routes with CPA. Browser login runs on CPA's own native plugin login abstraction: Management Center calls `GET /v0/management/mirasim-auth-url`, which reaches the plugin's `StartLogin`; the browser follows the returned Mirasim `/auth/oauth/<provider>/login` URL; Management Center then polls `GET /v0/management/auth-status?state=...`, which reaches `PollLogin`, and CPA saves the credential it returns. Both of those routes belong to the host and are management-key protected.
+使用 CPA 自带的管理中心（`/management.html`）。面板若开在别的网站上，「打开链接」会指到错误地址。
 
-Mirasim answers a login with `access_token` and `refresh_token` directly in the callback query rather than with an OAuth `code`, so CPA's `/v0/management/oauth-callback` cannot receive it — that endpoint rejects a callback with no `code` and persists only `{code, state, error}`. The callback therefore lands on a single-use listener the plugin binds on the CPA host's own `127.0.0.1`, at a random `/callback/<token>` path, which is closed as soon as the one callback arrives or the login expires.
+在管理中心添加 Mirasim 账号并点「打开链接」。页面列出 Mirasim 当前提供的登录方式，也可以改用邮箱验证码。一次登录保留 30 分钟。
 
-`oauth-login-provider` names the Mirasim sign-in provider used when the request names none; it defaults to `github`. A caller can override it for one login with a query parameter, `GET /v0/management/mirasim-auth-url?provider=google`. Either way the ID is checked against Mirasim's `/auth/oauth/providers` before any login URL is issued, so an ID the service is not currently offering fails with an error naming the ones it is, instead of sending the browser to a dead provider.
+下面三种情况授权后会自己完成：
 
-For a local interactive CPA process:
+- 浏览器和 CPA 在同一台机器
+- CPA 在本机 Docker 中，且已经映射出 CPA 端口
+- 管理中心经 SSH 隧道打开
+
+管理中心通过局域网地址或域名打开时，浏览器里的 `127.0.0.1` 到不了 CPA：
+
+1. 点「打开链接」。登录页和面板在同一地址上。
+2. 选择一种登录方式并完成授权。新标签页会停在打不开的 `http://127.0.0.1:<CPA端口>/v0/resource/plugins/mirasim/oauth/callback?...`。
+3. 复制该标签页地址栏中的完整地址，贴回登录页，点「完成登录」。
+
+贴错地址不会取消这次登录。也可以跳过第 2、3 步，直接在登录页用邮箱验证码。
+
+### 命令行
 
 ```powershell
 .\CLIProxyAPI.exe -config .\config.yaml --mirasim-login --mirasim-login-provider github
 ```
 
-`--mirasim-login-provider` takes any provider ID the service currently offers, validated through the same discovery endpoint; omit the flag to use the configured `oauth-login-provider`. CPA's `--no-browser` flag is supported. After about fifteen seconds the command also offers to accept the callback URL pasted back by hand, which completes a login whose browser could not reach the listener. Credentials are validated and saved by CPA; no external credential-directory import is supported.
+省略 `--mirasim-login-provider` 时使用 `oauth-login-provider`。所填方式必须是 Mirasim 当前提供的，否则登录不会开始。CPA 的 `--no-browser` 可用。大约 15 秒后，命令会接受贴回来的回调地址。`oauth-callback-port` 用来固定这次监听的端口。
 
-### Remote CPA hosts
+Docker：
 
-There is no public callback origin any more. The callback has to arrive on the CPA host's own loopback interface, and a browser resolves `127.0.0.1` on the machine it is itself running on. When the browser and CPA are on different machines, pin the port and forward it over SSH:
+```bash
+docker exec -it <容器名> ./CLIProxyAPI -config <配置文件> --mirasim-login --no-browser
+```
 
-1. Set `oauth-callback-port` in the plugin configuration on the CPA host and restart CPA. Pinning is required: an ephemeral port is not known until the login URL has already been handed to the browser, which is too late to build a tunnel for it.
-2. From the machine running the browser, forward that same port to the CPA host's loopback, and leave the tunnel up for the login:
+### 邮箱验证码
 
-   ```bash
-   ssh -L 18317:127.0.0.1:18317 operator@cpa.example.com
-   ```
-
-3. Start the login from Management Center as usual. Mirasim redirects the browser to `http://127.0.0.1:18317/callback/<token>`, which travels down the tunnel to the listener on the CPA host.
-
-The tunnel is only needed while a login is in progress. A pinned port hosts one listener at a time, so starting a second browser login closes the first one's listener rather than failing to bind. Running `--mirasim-login` in a shell on the CPA host is the simpler route whenever a browser is available there; on a headless host, `--no-browser` plus the pasted-callback prompt above avoids the tunnel as well.
-
-## Email code login
-
-A Mirasim account with no OAuth provider bound to it cannot use any of the flows above. Sign it in with a mailed code instead:
+没有绑定 OAuth 的账号用这种方式。在管理中心登录页填写邮箱，点「发送验证码 / Email me a code」，再填入邮件中的验证码。这条路径不经过 `127.0.0.1`。
 
 ```powershell
 .\CLIProxyAPI.exe -config .\config.yaml --mirasim-login --mirasim-login-email you@example.com
 ```
 
-Mirasim mails a code and the command prompts for it. Where no prompt can be answered, run the same command once to send the code, then again with `--mirasim-login-code <code>` to complete the login without a prompt. This is the CLI only, and structurally so: CPA's plugin login abstraction hands the plugin caller input exactly once, in the query string of `GET /v0/management/mirasim-auth-url`, and the `auth-status` polls that follow replay only the metadata the plugin registered when the login started. A code Mirasim mails after that first call has nowhere to be entered, and the plugin owns no page of its own to ask for it. A response without a refresh token is refused rather than saved, because CPA cannot keep such a credential alive.
+终端不能输入时，先运行上面的命令发出验证码，再用 `--mirasim-login-code <验证码>` 运行第二次。
 
-## Relay collection and metadata
+同一次登录最多发 3 次，间隔至少 1 分钟。验证码错满 5 次后这次登录作废。没有 refresh token 的结果不会保存。
 
-Set `collect: false` to send the official `x-mirasim-collect: off` signal inside signed/encrypted metadata. Omitted or true follows the relay default. `locale` is optional. Environment defaults are `MIRASIM_COLLECT` and `MIRASIM_LOCALE`; explicit YAML wins. This requests upstream behavior; it does not prove how the service retains data.
+## 使用
 
-Only inference routes carry that metadata. `/v1/models`, `/v1/limits` and `/v1/model-roster` describe the account rather than a conversation, so they are signed with empty metadata and sealed nothing, exactly as the official client sends them: no session, agent, sub-account, locale or collection signal is attached. Each inference call also carries its own `x-mirasim-call` identifier.
+模型列表来自该账号的目录。目录请求失败时，沿用这个凭证上次成功的列表；没有缓存时使用插件自带的默认列表，成员只是临时的，目录恢复后会换成账号实际返回的结果。列表里有某个模型，也不表示当前还有额度。
 
-CPA is asked to refresh the access token a quarter hour before it expires, the same headroom the official client gives a slow or briefly failing `/auth/refresh`. The token stays in use throughout that window and is only refused in the last thirty seconds, so a lagging refresh does not fail requests the relay would have served.
+思考力度写在模型名后，例如 `claude-sonnet-5(high)`。Claude 和 GPT 接受 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`。`ultra` 按 `max` 发送，这里不会执行官方客户端的多轮编排，因此它和 `max` 是同一次请求。DeepSeek 另接受 `off`。GLM 和 Kimi 接受 `low`、`high`、`max`。不支持的力度返回 HTTP 400。
 
-Relay calls are bearer-authorized with a device ticket minted at `/v1/device/session`. A relay that answers 404 or 501 there offers no device signing, so the plugin signs and authorizes with the access token itself and stops asking for one minute (404) or fifteen (501), matching the official client. Requests keep working throughout; only the credential inside the signature changes. Other mint failures still back off and surface, so CPA can rotate the credential.
+已知上下文至少 100 万 token 的 Claude 还可以加 `[1m]`，例如 `claude-sonnet-5[1m](high)`。转发前会去掉这两个后缀，真实模型名不变。
 
-`x-mirasim-account` carries a sub-account only when the access token names one. An account without that claim sends no account header at all, matching the official client; the local identity used for auth file naming and session scoping is never substituted for it. Host `execution_session_id` values produce stable, account-scoped relay session IDs; a host integration may supply `mirasim_turn_id` in executor metadata for task association. Missing task IDs are omitted. Browser-supplied `x-mirasim-*` headers cannot override these values. Repository paths and Git metadata are not collected by the plugin.
+账号目录含有 GPT 时，CPA 还会列出 `gpt-image-*`。这些是路由别名，账号能否生图由中继决定。`/v1/images/generations` 和 `/v1/images/edits` 会转到 Mirasim，也包括 Codex 的 `/backend-api/codex/images/*`。Codex 压缩请求走 `/v1/responses/compact`，别名是 `/backend-api/codex/responses/compact`。
 
-## Model metadata
+用 Claude Code 或 Codex 做一次真实请求来确认。手写的极简 Messages 请求失败，不能说明客户端不可用。插件不读取仓库路径或 Git 信息。
 
-The fallback catalog includes GPT 6 Astra and GPT 5.6 Sol/Terra/Luna. Their fallback context is 872,000 tokens for Astra and 372,000 for the GPT 5.6 models, taken from the catalog built into the inspected 0.0.336 client rather than from its narrower model-picker list, with a 128,000-token output limit. These are client metadata, not account-tested capacity guarantees. Claude Haiku remains in the catalog; a desktop toggle does not imply upstream removal.
+## 额度
 
-Model membership comes from the account's `/v1/models`, narrowed the way the official client narrows the same response: reserved placeholders and namespaced IDs are dropped, and a dated twin such as `claude-haiku-4-5-20251001` is dropped when the plain `claude-haiku-4-5` is served beside it. A dated ID with no plain counterpart is kept, since it is the only way to reach that model. Only Claude and GPT models are published, because those are the two wires this plugin speaks; the official client hides the other families the relay lists from its own picker, so nothing servable is withheld. A `max_input_tokens` the catalog reports supersedes the static fallback context above, so the published window is the one this account is actually served. Signed `/v1/model-roster` overlays context/output limits and effort when available. Specs are cached per credential in memory for ten minutes; failures retain that credential's last successful specs, otherwise static defaults apply. The cache is not persisted in auth files and resets on reload. CPA has no `autoCompactRatio` in its model metadata, so callers still control compaction thresholds.
+v7.2.159 及更新版本可在管理中心的标准额度页查看。管理中心 v1.24.2 的标准额度页不会画出插件额度，请打开侧边栏 **Mirasim Quota**。更早但仍受支持的 CPA 也用这个页面。页面显示套餐、免费或付费档、账号额度、按模型拆开的窗口、剩余比例和重置倒计时。某个模型用完不会显示成整个账号用完。Mirasim 没有清空额度的接口，所以不能在这里重置。
 
-Thinking controls are normalized to that form wherever they arrive from. CPA's parenthesized model suffix is validated and applied as before; a client speaking native Claude that puts `thinking` or `output_config.effort` in the payload instead has the amount carried over to the form the model accepts. A request that says nothing about thinking is forwarded untouched, and controls with no equivalent in the target form are left as sent rather than refused.
+页面不缓存。刷新会再次查询每个 Mirasim 凭证的额度。这些请求不计费，也不会触发推理。
 
-The roster's `adaptive` flag is also the only thing that selects a Claude model's upstream thinking form: adaptive models take `thinking.type=adaptive` with `output_config.effort`, non-adaptive models take `thinking.type=enabled` with `budget_tokens`, and each model publishes only the bounds its own form accepts. The form is never inferred from the model name. A Claude model with no roster entry — including one released after this build — keeps the effort form, which is what every Claude model on the relay uses. Request paths read only an already cached roster, so a cold or unreachable roster never delays an inference call.
-
-Claude models with a known context of at least one million tokens also publish `[1m]` selector aliases. For example, `claude-sonnet-5[1m](high)` strips both selectors before forwarding the real model ID, retains high effort, and adds `context-1m-2025-08-07` without losing other beta tokens.
-
-The official client's `ultra` means `max` plus client workflow orchestration. The request it puts on the wire is a `max` request, so `ultra` is accepted and sent as `max` wherever it arrives — model suffix, `output_config.effort`, or `reasoning.effort`. CPA's single-request executor still cannot run the surrounding multi-turn workflow, so `ultra` and `max` produce the same single API call here.
-
-Both mounts share one effort ladder: `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. An effort outside it, including `minimal` and `off`, returns HTTP 400 naming the ladder rather than being forwarded for the relay to reject. The official client's wider list covers agents this plugin does not speak for.
-
-That refusal comes from the executor, which is the only path a Mirasim request takes. The plugin also registers a thinking applier, but CPA consults registered appliers only from its built-in executors, and it discards an error one returns. Nothing here depends on it being reached; it is declared so the shape stays available if that path ever widens.
-
-## Codex compaction
-
-CPA Responses compact requests use `/v1/responses/compact`, including the `/backend-api/codex/responses/compact` alias. This path accepts non-streaming Responses input/output and preserves opaque compaction items. Ordinary Responses completions retain their SSE handling.
-
-## Quota and client validation
-
-The plugin registers as a CPA quota provider, so a Mirasim credential reports
-`supports_quota` and a stock Management Center renders it on its own quota page.
-The same data is available over the Management API:
+管理接口需要管理密钥。`auth_index` 是 CPA 运行时的凭证序号：
 
 ```text
-POST /v0/management/quota/fetch                 {"auth_index": "<runtime-auth-index>"}
-GET  /v0/management/plugins/mirasim/quota?auth_index=<runtime-auth-index>
+POST /v0/management/quota/fetch
+GET  /v0/management/plugins/mirasim/quota?auth_index=<序号>
+GET  /v0/management/mirasim/quota?auth_index=<序号>
 ```
 
-Account-wide windows and model-scoped ones such as `7d_fable` are grouped separately, so one spent model does not read as a spent account. Resetting is reported as unsupported because Mirasim publishes limits and offers no route that clears them.
+最后一条留给仍在使用旧额度卡片的面板，返回原来的 `quota.windows`。
 
-Quotas come only from `GET /v1/limits`. Unavailable limits report no buckets; quota checks never trigger inference. Utilization is rounded once to one decimal and then saturates at 99%, matching the official client.
+额度页地址里有一段随机路径，插件重载后才会变。谁拿到这个地址，谁就能在重载前查看额度。它会出现在 CPA 日志和浏览器历史里。页面不显示 token、邮箱、设备密钥或凭证序号。
 
-Both Management API routes above are CPA's own. The plugin registers no HTTP routes with the host at all, on any prefix. Earlier releases served this data from a plugin-owned route and needed a patched Management Center to draw it; neither is the case now, and a stock panel reads it over those host routes.
+关掉 CPA 自带面板、又把管理中心放到另一个域名时，浏览器会拦住这个 iframe。
 
-Validate inference with an actual Claude Code or Codex client and correlate the result with CPA logs. A minimal hand-written Messages request can fail even when the real client works. Model catalog presence does not guarantee upstream capacity.
+## 安全
 
-## GitHub Releases
+OAuth 回调的查询参数里有 `access_token` 和 `refresh_token`。不要把地址栏中的链接发给别人。CPA 日志会把名字里带 `token` 的参数部分打码，放在 CPA 前面的反向代理仍可能记下完整 URL。
 
-The [workflow](.github/workflows/build.yml), based on [cpa-plugin-gemini-cli](https://github.com/router-for-me/cpa-plugin-gemini-cli), runs tests and vet, then builds Linux/macOS/Windows on amd64 and arm64, plus FreeBSD on amd64.
+## 许可
 
-Push a dotted numeric tag such as `v0.7.1` to GitHub to publish a release. Prerelease/build suffixes are rejected. Release assets are `mirasim_<version>_<os>_<arch>.zip` and `checksums.txt`; each ZIP contains one root-level `mirasim.so`, `mirasim.dylib`, or `mirasim.dll`. All seven archives and their SHA-256 hashes are checked before uploading.
+[MIT License](LICENSE)。
 
-Pull requests and manual branch runs produce Actions artifacts only. Tag runs publish or update the corresponding release using the automatic `GITHUB_TOKEN`; no personal access token is required. Keep the workflow matrix and `PLATFORMS` in `scripts/plugin_store.py` aligned when changing targets.
-
-## Plugin store
-
-[registry.json](registry.json) targets the planned repository `KIDA-MNESIA/cpa-plugin-mirasim`, with author `KIDA-MNESIA` and plugin ID `mirasim`. It omits a fixed version so CPA resolves updates from the latest release. This does not mean the plugin is already officially listed.
-
-After publishing the repository and a successful release, test installation using this additional CPA store source:
-
-```yaml
-plugins:
-  enabled: true
-  dir: plugins
-  store-sources:
-    - https://raw.githubusercontent.com/KIDA-MNESIA/cpa-plugin-mirasim/main/registry.json
-```
-
-Confirm GitHub's **Latest** release is the intended published version, verify its assets, then install, enable, and test OAuth and a real client request. Packaging checks do not prove ABI or runtime compatibility.
-
-Generate submission files with Python 3.11+, using the actual published tag:
-
-```powershell
-python scripts/plugin_store.py prepare-submission --repository https://github.com/KIDA-MNESIA/cpa-plugin-mirasim --author KIDA-MNESIA --tag v0.7.1
-```
-
-This writes `dist/store/registry.json` and `dist/store/store-pr.md`. Verify the draft's links and record actual test results. Fork [CLIProxyAPI-Plugins-Store](https://github.com/router-for-me/CLIProxyAPI-Plugins-Store), check for a duplicate ID, and append `plugins[0]` to its registry without replacing existing entries. Submit that registry change and the verified PR description. Later updates normally need only a new latest release. If the repository or author changes, regenerate and update the root registry.
-
-Local release checks:
-
-```powershell
-python -m unittest discover -s scripts -p test_plugin_store.py -v
-python scripts/plugin_store.py verify-release --tag v0.7.1 --directory dist/release
-```
-
-Place all seven ZIPs and their `.zip.sha256` sidecars in `dist/release` for the last command; it generates `checksums.txt`.
-
-## Security and license
-
-Native plugins run inside CPA. Protect `auth-dir`: it contains bearer tokens and private keys.
-
-The plugin exposes no endpoint of its own through CPA, unauthenticated or otherwise. The only listener it ever opens is the OAuth callback on the CPA host's `127.0.0.1`, which answers one request on a random path and then closes. That callback carries `access_token` and `refresh_token` in its query string, so keep its port on loopback or inside the SSH tunnel above: do not publish it, and do not put it behind a proxy that logs request URLs.
-
-Licensed under the [MIT License](LICENSE).
-
-开源技术和开发者交流，欢迎访问 [Linux DO](https://linux.do/)。
+开源技术和开发者交流：<https://linux.do/>。

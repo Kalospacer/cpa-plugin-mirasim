@@ -21,6 +21,7 @@ import (
 )
 
 var SupportedFormats = []string{
+	"openai-image",
 	sdktranslator.FormatOpenAI.String(),
 	sdktranslator.FormatOpenAIResponse.String(),
 	sdktranslator.FormatClaude.String(),
@@ -41,6 +42,9 @@ func (e *Executor) Identifier() string { return credentials.Provider }
 
 func (e *Executor) Execute(ctx context.Context, req pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
 	ctx = mirasim.WithRequestIdentity(ctx, req.Metadata)
+	if sourceFormat(req).String() == "openai-image" {
+		return e.executeImage(ctx, req)
+	}
 	if req.Alt == "responses/compact" {
 		return e.executeCompact(ctx, req)
 	}
@@ -84,6 +88,9 @@ func (e *Executor) Execute(ctx context.Context, req pluginapi.ExecutorRequest) (
 
 func (e *Executor) ExecuteStream(ctx context.Context, req pluginapi.ExecutorRequest) (pluginapi.ExecutorStreamResponse, error) {
 	ctx = mirasim.WithRequestIdentity(ctx, req.Metadata)
+	if sourceFormat(req).String() == "openai-image" {
+		return e.executeImageStream(ctx, req)
+	}
 	if req.Alt == "responses/compact" {
 		return pluginapi.ExecutorStreamResponse{}, compactError("streaming is not supported for /responses/compact")
 	}
@@ -173,19 +180,26 @@ func (e *Executor) HttpRequest(ctx context.Context, req pluginapi.ExecutorHTTPRe
 		method = http.MethodPost
 	}
 	body := append([]byte(nil), req.Body...)
+	var headers http.Header
 	if len(body) > 0 {
-		wireFormat := sdktranslator.FormatCodex
-		if strings.HasPrefix(relayPath, "/v1/messages") {
-			wireFormat = sdktranslator.FormatClaude
+		if isImagePath(relayPath) {
+			body, headers, errParse = normalizeImageBody(body, req.Headers, "")
+		} else {
+			wireFormat := sdktranslator.FormatCodex
+			if strings.HasPrefix(relayPath, "/v1/messages") {
+				wireFormat = sdktranslator.FormatClaude
+			}
+			model := modelFromJSON(body)
+			body, errParse = normalizeHTTPRequestBody(body, model, wireFormat, claudeShape(client, model))
+			body = ensureClaudeAttributionSystem(body, model, storage.ClientVersion)
 		}
-		model := modelFromJSON(body)
-		body, errParse = normalizeHTTPRequestBody(body, model, wireFormat, claudeShape(client, model))
 		if errParse != nil {
 			return pluginapi.ExecutorHTTPResponse{}, errParse
 		}
-		body = ensureClaudeAttributionSystem(body, model, storage.ClientVersion)
 	}
-	headers := cloneHeaders(req.Headers)
+	if headers == nil {
+		headers = cloneHeaders(req.Headers)
+	}
 	if strings.HasPrefix(relayPath, "/v1/messages") && thinkingpkg.ParseModel(modelFromJSON(req.Body)).LongContext {
 		addLongContextBeta(headers)
 	}
@@ -211,6 +225,10 @@ func normalizeRelayPath(requestPath string) string {
 		return "/v1/responses/compact"
 	case "/backend-api/codex/alpha/search", "/v1/alpha/search":
 		return "/v1/alpha/search"
+	case "/backend-api/codex/images/generations", "/v1/images/generations":
+		return "/v1/images/generations"
+	case "/backend-api/codex/images/edits", "/v1/images/edits":
+		return "/v1/images/edits"
 	default:
 		return requestPath
 	}
@@ -262,6 +280,7 @@ func buildProviderRequest(req pluginapi.ExecutorRequest, stream bool, shape thin
 	}
 	if wire == sdktranslator.FormatCodex {
 		body = keepCallerParallelToolCalls(payload, body)
+		body = promoteAdditionalTools(body)
 	}
 	body, errNormalize := normalizeBody(body, model, stream, wire)
 	if errNormalize != nil {
@@ -292,11 +311,10 @@ func selectWireFormat(model string, source sdktranslator.Format) sdktranslator.F
 	if strings.HasPrefix(normalizedModel, "gpt-") {
 		return sdktranslator.FormatCodex
 	}
-	if strings.HasPrefix(normalizedModel, "claude-") {
+	if strings.HasPrefix(normalizedModel, "claude-") || strings.HasPrefix(normalizedModel, "deepseek-") || strings.HasPrefix(normalizedModel, "glm-") || strings.HasPrefix(normalizedModel, "kimi-") {
 		return sdktranslator.FormatClaude
 	}
-	// Unknown model families retain the caller's native Claude shape. Published
-	// Mirasim models are family-prefixed and therefore take the branches above.
+	// Unknown model families retain the caller's native Claude shape.
 	if source == sdktranslator.FormatClaude {
 		return sdktranslator.FormatClaude
 	}
@@ -333,17 +351,10 @@ func translateRequest(from, to sdktranslator.Format, model string, body []byte, 
 	return registry.TranslateRequest(from, to, model, body, stream), nil
 }
 
-// keepCallerParallelToolCalls restores the caller's parallel_tool_calls value
-// after the Responses-to-Codex translation.
-//
-// That translation is written for the first-party Codex backend, which requires
-// parallel_tool_calls to be true, so it rewrites any other value. Mirasim's
-// relay takes the opposite view of the requests this plugin sends: a body
-// carrying the Codex Responses-Lite marker or an input-level additional_tools
-// item is refused with unsupported_value unless parallel_tool_calls is
-// explicitly false. Codex ships exactly that body and states false, so the
-// caller's own value is what the relay expects and is not this plugin's to
-// overwrite. A caller that says nothing keeps saying nothing.
+// keepCallerParallelToolCalls 在 Responses 到 Codex 的转换后恢复调用方的并行工具设置。
+// 上游转换器面向原生 Codex，会强制启用 parallel_tool_calls；Mirasim 由调用方决定该值。
+// Responses Lite 的工具声明由 promoteAdditionalTools 单独迁移，不应改变此设置。
+// 调用方没有提供该字段时，保持省略，而不是代为启用。
 func keepCallerParallelToolCalls(source, translated []byte) []byte {
 	value := gjson.GetBytes(source, "parallel_tool_calls")
 	if !value.Exists() {
@@ -549,6 +560,9 @@ func upstreamHeaders(source http.Header, wire sdktranslator.Format) http.Header 
 
 func normalizeHTTPRequestBody(body []byte, model string, wire sdktranslator.Format, shape thinkingpkg.ModelShape) ([]byte, error) {
 	body = thinkingpkg.NormalizeWorkflowRequest(body)
+	if wire == sdktranslator.FormatCodex {
+		body = promoteAdditionalTools(body)
+	}
 	var payload map[string]any
 	if errDecode := json.Unmarshal(body, &payload); errDecode != nil {
 		return nil, fmt.Errorf("decode Mirasim HTTP request: %w", errDecode)

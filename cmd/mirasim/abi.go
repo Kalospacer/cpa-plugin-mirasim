@@ -58,6 +58,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	pluginconfig "github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/config"
 	mirasimplugin "github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/plugin"
+	"github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/quotapage"
 )
 
 var abiState = struct {
@@ -169,6 +170,79 @@ type abiQuotaFetchRequest struct {
 
 type abiQuotaResetRequest struct {
 	pluginapi.QuotaResetRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+// abiManagementRegistration mirrors the host's RPC registration shape. Route
+// handlers stay behind: the host dispatches every registered route back through
+// management.handle.
+type abiManagementRegistration struct {
+	Routes    []abiManagementRoute `json:"routes,omitempty"`
+	Resources []abiResourceRoute   `json:"resources,omitempty"`
+}
+
+type abiManagementRoute struct {
+	Method      string `json:"Method"`
+	Path        string `json:"Path"`
+	Description string `json:"Description,omitempty"`
+}
+
+type abiResourceRoute struct {
+	Path        string `json:"Path"`
+	Menu        string `json:"Menu,omitempty"`
+	Description string `json:"Description,omitempty"`
+}
+
+// abiManagementRequest mirrors the host's rpcManagementRequest. The host
+// attaches host_callback_id to every management and resource request, and it
+// is the only way a handler reaches host.auth.list, host.auth.get or the host
+// HTTP client.
+type abiManagementRequest struct {
+	pluginapi.ManagementRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+type abiHostAuthListResponse struct {
+	Files []pluginapi.HostAuthFileEntry `json:"files"`
+}
+
+type abiHostAuthGetRequest struct {
+	pluginapi.HostAuthGetRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+// abiHostServices implements quotapage.HostServices over the host callbacks a
+// resource request may use. The host resolves the callback ID to the open
+// callback context of the request being served, so these calls stop working
+// once that request is answered.
+type abiHostServices struct {
+	callbackID string
+}
+
+var _ quotapage.HostServices = abiHostServices{}
+
+func (s abiHostServices) ListAuth(context.Context) ([]pluginapi.HostAuthFileEntry, error) {
+	resp, errCall := callHost[abiHostAuthListResponse](pluginabi.MethodHostAuthList, abiHostAuthListRequest{HostCallbackID: s.callbackID})
+	if errCall != nil {
+		return nil, errCall
+	}
+	return resp.Files, nil
+}
+
+func (s abiHostServices) GetAuth(_ context.Context, authIndex string) (pluginapi.HostAuthGetResponse, error) {
+	return callHost[pluginapi.HostAuthGetResponse](pluginabi.MethodHostAuthGet, abiHostAuthGetRequest{
+		HostAuthGetRequest: pluginapi.HostAuthGetRequest{AuthIndex: authIndex},
+		HostCallbackID:     s.callbackID,
+	})
+}
+
+func (s abiHostServices) HTTPClient() pluginapi.HostHTTPClient {
+	return abiHostHTTPClient{callbackID: s.callbackID}
+}
+
+// abiHostAuthListRequest carries only the callback ID: the host's auth list
+// callback ignores the rest of the request.
+type abiHostAuthListRequest struct {
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
@@ -411,6 +485,23 @@ func handleABIMethod(ctx context.Context, method string, request []byte) ([]byte
 		}
 		resp, errCall := p.ExecuteCommandLine(ctx, req)
 		return abiOKEnvelopeWithError(resp, errCall)
+	case pluginabi.MethodManagementRegister:
+		var req pluginapi.ManagementRegistrationRequest
+		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
+			return nil, errDecode
+		}
+		resp, errCall := p.RegisterManagement(ctx, req)
+		if errCall != nil {
+			return abiErrorEnvelopeFromError("plugin_error", errCall), nil
+		}
+		return abiOKEnvelope(toABIManagementRegistration(resp))
+	case pluginabi.MethodManagementHandle:
+		var rpcReq abiManagementRequest
+		if errDecode := json.Unmarshal(request, &rpcReq); errDecode != nil {
+			return nil, errDecode
+		}
+		resp, errCall := p.HandleManagementWithHost(ctx, rpcReq.ManagementRequest, abiHostServices{callbackID: rpcReq.HostCallbackID})
+		return abiOKEnvelopeWithError(resp, errCall)
 	case pluginabi.MethodQuotaDescribe:
 		var req pluginapi.QuotaDescribeRequest
 		if errDecode := json.Unmarshal(request, &req); errDecode != nil {
@@ -484,6 +575,14 @@ func handleRegister(request []byte) ([]byte, error) {
 func warnDeprecatedConfigKeys(configYAML []byte) {
 	for _, key := range pluginconfig.DeprecatedKeys(configYAML) {
 		replacement := pluginconfig.ReplacementFor(key)
+		if replacement == "" {
+			emitHostLog(
+				"warn",
+				fmt.Sprintf("mirasim: configuration key %q has been removed and is ignored; delete it", key),
+				map[string]any{"deprecated_key": key},
+			)
+			continue
+		}
 		emitHostLog(
 			"warn",
 			fmt.Sprintf("mirasim: configuration key %q has been removed and is ignored; use %q instead", key, replacement),
@@ -508,6 +607,22 @@ func currentPlugin() (*mirasimplugin.MirasimPlugin, error) {
 		return nil, fmt.Errorf("Mirasim plugin is not registered")
 	}
 	return abiState.plugin, nil
+}
+
+func toABIManagementRegistration(resp pluginapi.ManagementRegistrationResponse) abiManagementRegistration {
+	out := abiManagementRegistration{
+		Routes:    make([]abiManagementRoute, 0, len(resp.Routes)),
+		Resources: make([]abiResourceRoute, 0, len(resp.Resources)),
+	}
+	for _, route := range resp.Routes {
+		out.Routes = append(out.Routes, abiManagementRoute{
+			Method: route.Method, Path: route.Path, Description: route.Description,
+		})
+	}
+	for _, resource := range resp.Resources {
+		out.Resources = append(out.Resources, abiResourceRoute{Path: resource.Path, Menu: resource.Menu, Description: resource.Description})
+	}
+	return out
 }
 
 type abiHostHTTPClient struct {

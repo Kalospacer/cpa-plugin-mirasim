@@ -35,6 +35,7 @@ const (
 	headerMirasimSession           = "x-mirasim-session"
 	headerMirasimAgent             = "x-mirasim-agent"
 	headerMirasimCall              = "x-mirasim-call"
+	responsesLiteHeader            = "x-openai-internal-codex-responses-lite"
 )
 
 var signatureHeaderNames = map[string]struct{}{
@@ -170,7 +171,7 @@ func (c *Client) signatureHeadersLocked(method, requestPath, credential string, 
 	return headers, nil
 }
 
-func (c *Client) relayMetadataLocked(ctx context.Context, requestPath string) (map[string]string, error) {
+func (c *Client) relayMetadataLocked(ctx context.Context, requestPath string, body []byte) (map[string]string, error) {
 	if c.sessionID == "" {
 		sessionID, errSession := randomUUID(rand.Reader)
 		if errSession != nil {
@@ -187,7 +188,7 @@ func (c *Client) relayMetadataLocked(ctx context.Context, requestPath string) (m
 	}
 	metadata := map[string]string{
 		headerMirasimSession: c.sessionID,
-		headerMirasimAgent:   relayAgent(requestPath),
+		headerMirasimAgent:   relayAgentForRequest(requestPath, body),
 		headerMirasimCall:    callID,
 	}
 	if identity, ok := ctx.Value(requestIdentityKey{}).(requestIdentity); ok {
@@ -214,10 +215,33 @@ func (c *Client) relayMetadataLocked(ctx context.Context, requestPath string) (m
 }
 
 func relayAgent(requestPath string) string {
-	if strings.HasPrefix(requestPath, "/v1/responses") || strings.HasPrefix(requestPath, "/v1/alpha/search") {
+	if strings.HasPrefix(requestPath, "/v1/responses") || strings.HasPrefix(requestPath, "/v1/alpha/search") || strings.HasPrefix(requestPath, "/v1/images/") {
 		return "codex"
 	}
 	return "claude"
+}
+
+func relayAgentForRequest(requestPath string, body []byte) string {
+	if !strings.HasPrefix(requestPath, "/v1/messages") {
+		return relayAgent(requestPath)
+	}
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return relayAgent(requestPath)
+	}
+	model := strings.ToLower(strings.TrimSpace(payload.Model))
+	switch {
+	case strings.HasPrefix(model, "deepseek-"):
+		return "dsh"
+	case strings.HasPrefix(model, "glm-"):
+		return "zcode"
+	case strings.HasPrefix(model, "kimi-"):
+		return "kimi"
+	default:
+		return relayAgent(requestPath)
+	}
 }
 
 func randomUUID(source io.Reader) (string, error) {

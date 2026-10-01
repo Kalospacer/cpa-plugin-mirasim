@@ -114,6 +114,8 @@ func (p *Pool) Forget(storage credentials.Storage) {
 
 type Client struct {
 	options         RelayOptions
+	catalogMu       sync.Mutex
+	catalogModels   []RemoteModel
 	rosterMu        sync.Mutex
 	roster          ModelRoster
 	rosterNextCheck time.Time
@@ -392,6 +394,9 @@ func (c *Client) ListModels(ctx context.Context, client pluginapi.HostHTTPClient
 	if errParse != nil {
 		return Catalog{}, errParse
 	}
+	c.catalogMu.Lock()
+	c.catalogModels = append([]RemoteModel(nil), models...)
+	c.catalogMu.Unlock()
 	quota, available := QuotaFromHeaders(resp.Headers, time.Now())
 	if !available {
 		quota = QuotaSnapshot{
@@ -402,6 +407,14 @@ func (c *Client) ListModels(ctx context.Context, client pluginapi.HostHTTPClient
 		}
 	}
 	return Catalog{Models: models, Quota: quota}, nil
+}
+
+// CachedModels retains the last successful catalog for this credential only.
+// It keeps dynamic account models registered during a temporary catalog outage.
+func (c *Client) CachedModels() []RemoteModel {
+	c.catalogMu.Lock()
+	defer c.catalogMu.Unlock()
+	return append([]RemoteModel(nil), c.catalogModels...)
 }
 
 // FetchQuota queries structured limits only. A missing route must never
@@ -462,7 +475,7 @@ func (c *Client) authHeaders(ctx context.Context, client pluginapi.HostHTTPClien
 	}
 	var metadata map[string]string
 	if !controlPlane {
-		relayMetadata, errMetadata := c.relayMetadataLocked(ctx, requestPath)
+		relayMetadata, errMetadata := c.relayMetadataLocked(ctx, requestPath, body)
 		if errMetadata != nil {
 			return nil, errMetadata
 		}
@@ -717,8 +730,11 @@ func (c *Client) observeQuota(headers http.Header) {
 func prepareHeaders(source, auth http.Header, stream bool) http.Header {
 	headers := cloneHeader(source)
 	for name := range headers {
-		if strings.HasPrefix(strings.ToLower(name), "x-mirasim-") {
-			headers.Del(name)
+		// Codex marks a Responses Lite request with this header. The relay
+		// refuses the marker with 400 unsupported_value even once the executor
+		// has moved Lite's tools back to the top level, so it never leaves here.
+		if strings.HasPrefix(strings.ToLower(name), "x-mirasim-") || strings.EqualFold(name, responsesLiteHeader) {
+			delete(headers, name)
 		}
 	}
 	for _, name := range []string{

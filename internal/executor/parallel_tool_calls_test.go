@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -29,13 +30,8 @@ func (h parallelToolCallsHost) DoStream(ctx context.Context, req pluginapi.HTTPR
 	return pluginapi.HTTPStreamResponse{StatusCode: response.StatusCode, Headers: response.Headers, Chunks: chunks}, nil
 }
 
-// The Responses-to-Codex translation is written for the first-party Codex
-// backend, which requires parallel_tool_calls to be true, so it rewrites
-// whatever the caller sent. Mirasim's relay refuses a request that carries the
-// Codex Responses-Lite marker or an input-level additional_tools item unless
-// that field is explicitly false, and Codex sends exactly that request stating
-// false. The caller's own value therefore has to survive the translation, and a
-// caller that says nothing must not have a value invented for it.
+// 转换器会默认开启并行工具调用，本插件必须保留调用方的 true、false 或省略状态。
+// Lite 工具声明应完整移到顶层 tools，剩余消息历史不得被重写。
 func TestCodexTranslationKeepsCallerParallelToolCalls(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -113,11 +109,20 @@ func TestCodexTranslationKeepsCallerParallelToolCalls(t *testing.T) {
 					t.Fatalf("parallel_tool_calls = %v, want %v", value, testCase.want)
 				}
 				input, ok := sent["input"].([]any)
-				if !ok || len(input) != 2 {
-					t.Fatalf("input was rewritten: %v", sent["input"])
+				if !ok || len(input) != 1 {
+					t.Fatalf("unexpected input after promoting Lite tools: %v", sent["input"])
 				}
-				if first, _ := input[0].(map[string]any); first["type"] != "additional_tools" {
-					t.Fatalf("additional_tools item was rewritten: %v", input[0])
+				var original map[string]any
+				if err := json.Unmarshal(payload, &original); err != nil {
+					t.Fatal(err)
+				}
+				originalInput := original["input"].([]any)
+				if !reflect.DeepEqual(input, originalInput[1:]) {
+					t.Fatalf("message history was rewritten: %v", input)
+				}
+				wantTools := originalInput[0].(map[string]any)["tools"]
+				if !reflect.DeepEqual(sent["tools"], wantTools) {
+					t.Fatalf("promoted tools changed: %v", sent["tools"])
 				}
 			})
 		}
