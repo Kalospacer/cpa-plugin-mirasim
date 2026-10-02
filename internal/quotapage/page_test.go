@@ -3,10 +3,12 @@ package quotapage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -139,25 +141,37 @@ func TestOwnsMatchesOnlyItsOwnSegment(t *testing.T) {
 }
 
 func TestPageRendersAccountAndModelGroupsWithoutCredentials(t *testing.T) {
-	const authJSON = `{"type":"mirasim","access_token":"access-secret","refresh_token":"refresh-secret",` +
-		`"device_private_key":"device-secret","email":"operator@example.com"}`
+	planExp := time.Now().Add(29*24*time.Hour + time.Hour).Unix()
+	authJSON := fmt.Sprintf(`{"type":"mirasim","access_token":"access-secret","refresh_token":"refresh-secret",`+
+		`"device_private_key":"device-secret","email":"operator@example.com","plan":"pro","plan_exp":%d}`, planExp)
+	// Resets are relative to now so the calendar segments stay inside the
+	// visible two weeks no matter when the test runs.
+	reset5h := time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)
+	reset7d := time.Now().UTC().Add(2*24*time.Hour + 30*time.Minute).Format(time.RFC3339)
 	fetcher := &fakeFetcher{responses: map[string]pluginapi.QuotaFetchResponse{
 		"a1": {
 			Subscription: &pluginapi.QuotaSubscription{Plan: "pro", TierName: "paid"},
 			Groups: []pluginapi.QuotaGroup{
 				{DisplayName: "Account limits", Buckets: []pluginapi.QuotaBucket{
-					{Window: "5h", RemainingFraction: 0.425, ResetTime: "2026-09-20T08:00:00Z", Description: "57.5% used · ok"},
+					{Window: "5h", RemainingFraction: 0.42, ResetTime: reset5h, Description: "57.5% used · ok"},
+					{Window: "7d", RemainingFraction: 0.86, ResetTime: reset7d},
 				}},
 				{DisplayName: "Model limits", Buckets: []pluginapi.QuotaBucket{
-					{Window: "gpt-5.6-sol", RemainingFraction: 0, ResetTime: "2026-09-21T00:30:00Z"},
+					{Window: "7d_claude", RemainingFraction: 0, ResetTime: reset7d},
 				}},
 			},
 		},
 	}}
 	host := &fakeHost{
-		entries: []pluginapi.HostAuthFileEntry{{ID: "id-1", AuthIndex: "a1", Provider: "mirasim", Type: "mirasim"}},
-		auths:   map[string]pluginapi.HostAuthGetResponse{"a1": {AuthIndex: "a1", JSON: []byte(authJSON)}},
-		client:  fakeHTTPClient{},
+		entries: []pluginapi.HostAuthFileEntry{{
+			ID: "id-1", AuthIndex: "a1", Provider: "mirasim", Type: "mirasim",
+			Success: 1760, Failed: 149,
+			RecentRequests: []pluginapi.HostRecentRequestEntry{
+				{Time: "t1", Success: 1}, {Time: "t2", Success: 1}, {Time: "t3", Failed: 1},
+			},
+		}},
+		auths:  map[string]pluginapi.HostAuthGetResponse{"a1": {AuthIndex: "a1", JSON: []byte(authJSON)}},
+		client: fakeHTTPClient{},
 	}
 	page := New(fetcher)
 
@@ -167,21 +181,24 @@ func TestPageRendersAccountAndModelGroupsWithoutCredentials(t *testing.T) {
 	}
 	body := string(resp.Body)
 	for _, want := range []string{
-		"账户 1", "Account 1",
-		"pro", "paid",
-		"Account limits", "Model limits",
-		"5h", "42.5%", "2026-09-20 08:00 UTC", "datetime=\"2026-09-20T08:00:00Z\"", "57.5% used",
-		"距重置 / Until reset", "data-countdown", "new Intl.DateTimeFormat", "Date.now()",
-		"gpt-5.6-sol", "0.0%",
+		"operator@example.com", `class="card-name"`, `class="plan-value">pro<`, "续期时间", "天后",
+		"个凭证", "个已加载", "5小时限额", "剩余 42%", `width:42.0%`, `bar mid`,
+		"周限额", "剩余 86%", `width:86.0%`, "MODEL 限额", "7d_claude", "已用尽", `bar hot`, `width:0.0%`,
+		"此分组包含：7d_claude", "配额窗口", "两周", `class="gh-top">日<`,
+		`class="seg cur"`, `class="seg next"`, `class="seg past"`, `class="track"`, `class="lane-head"`,
+		`data-view="week"`, `data-view="hour"`, "按周", "5小时", "nowline",
+		"data-until", "小时后刷新", "分钟后刷新", "Date.now()", "data-refresh", "location.reload()",
+		`id="toast"`, "sessionStorage", "mq-refreshed", "data-nav", "window-fill",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("page does not contain %q:\n%s", want, body)
 		}
 	}
-	// Nothing from the credential JSON may reach the browser, and the token
-	// endpoint's error text has no place on a page either.
+	// Nothing from the credential JSON's secrets may reach the browser. The
+	// email is the card's identity and is intentionally shown, the way the
+	// panel's own credential card shows it; tokens and keys stay out.
 	for _, secret := range []string{
-		"access-secret", "refresh-secret", "device-secret", "operator@example.com",
+		"access-secret", "refresh-secret", "device-secret",
 		"access_token", "refresh_token", "device_private_key",
 	} {
 		if strings.Contains(body, secret) {
@@ -241,14 +258,21 @@ func TestPageLeavesMissingOrInvalidResetWithoutCountdown(t *testing.T) {
 	if !strings.Contains(body, `datetime="2026-09-20T08:00:00.123Z"`) {
 		t.Fatalf("offset reset was not normalized to one instant:\n%s", body)
 	}
-	if count := strings.Count(body, `<time datetime=`); count != 1 {
+	if count := strings.Count(body, `<time `); count != 1 {
 		t.Fatalf("time element count = %d, want only the valid reset:\n%s", count, body)
 	}
-	if !strings.Contains(body, `<td>missing</td><td>0.0%</td><td>—</td><td class="reset-countdown" data-countdown>—</td>`) {
-		t.Fatalf("missing reset did not stay unavailable:\n%s", body)
-	}
-	if !strings.Contains(body, `<td>invalid</td><td>0.0%</td><td>unknown</td><td class="reset-countdown" data-countdown>—</td>`) {
-		t.Fatalf("invalid reset did not stay unavailable:\n%s", body)
+	// Progress-bar rows for missing/invalid resets keep their name and show the
+	// reset value as unavailable; they get no <time> element and no live
+	// countdown.
+	for _, fragment := range []string{
+		`<span class="limit-name" title="missing">missing</span>`,
+		`<span class="limit-name" title="invalid">invalid</span>`,
+		`<span class="limit-until">—</span>`,
+		`<span class="limit-until">unknown</span>`,
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Fatalf("progress bar for a reset-less window is missing %q:\n%s", fragment, body)
+		}
 	}
 }
 
