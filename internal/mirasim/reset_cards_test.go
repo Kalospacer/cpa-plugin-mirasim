@@ -2,7 +2,6 @@ package mirasim
 
 import (
 	"context"
-	"crypto/ed25519"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,11 +12,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// resetCardsServer serves the device-session ticket plus the reset-card routes
-// and records every path it was asked for.
+// resetCardsServer serves the reset-card routes and records every path it was
+// asked for. 重置卡路由只认账号登录令牌，任何设备票据请求都视为错误。
 type resetCardsServer struct {
 	t          *testing.T
-	publicKey  ed25519.PublicKey
 	credential string
 	listStatus int
 	cards      string
@@ -35,20 +33,17 @@ func (s *resetCardsServer) host() fakeHostClient {
 		headers := make(http.Header)
 		switch {
 		case parsed.Path == sessionPath:
-			assertDeviceSessionRequest(s.t, s.publicKey, req, s.credential)
-			return pluginapi.HTTPResponse{
-				StatusCode: http.StatusOK, Headers: headers,
-				Body: []byte(`{"ticket":"device-ticket","expiresIn":900}`),
-			}, nil
+			s.t.Error("reset cards must not open a device session")
+			return pluginapi.HTTPResponse{StatusCode: http.StatusInternalServerError, Headers: headers}, nil
 		case parsed.Path == resetCardsPath:
-			assertControlPlaneRequest(s.t, s.publicKey, req, "device-ticket")
+			assertAccountTokenRequest(s.t, req, s.credential)
 			status := s.listStatus
 			if status == 0 {
 				status = http.StatusOK
 			}
 			return pluginapi.HTTPResponse{StatusCode: status, Headers: headers, Body: []byte(s.cards)}, nil
 		case strings.HasPrefix(parsed.Path, resetCardsPath+"/") && strings.HasSuffix(parsed.Path, "/redeem"):
-			assertControlPlaneRequest(s.t, s.publicKey, req, "device-ticket")
+			assertAccountTokenRequest(s.t, req, s.credential)
 			cardID := strings.TrimSuffix(strings.TrimPrefix(parsed.Path, resetCardsPath+"/"), "/redeem")
 			status, body := s.redeem(cardID)
 			return pluginapi.HTTPResponse{StatusCode: status, Headers: headers, Body: []byte(body)}, nil
@@ -56,6 +51,22 @@ func (s *resetCardsServer) host() fakeHostClient {
 			return pluginapi.HTTPResponse{}, fmt.Errorf("unexpected path %s", parsed.Path)
 		}
 	}}
+}
+
+// assertAccountTokenRequest 校验请求与官方客户端一致：只带账号令牌，没有设备签名与请求体。
+func assertAccountTokenRequest(t *testing.T, req pluginapi.HTTPRequest, accessToken string) {
+	t.Helper()
+	if got := req.Headers.Get("Authorization"); got != "Bearer "+accessToken {
+		t.Errorf("Authorization = %q, want the account access token", got)
+	}
+	for name := range req.Headers {
+		if strings.HasPrefix(strings.ToLower(name), "x-mirasim-") {
+			t.Errorf("reset-card request carried device header %s", name)
+		}
+	}
+	if len(req.Body) != 0 {
+		t.Errorf("reset-card request body = %q, want none", req.Body)
+	}
 }
 
 func (s *resetCardsServer) redeemPaths() []string {
@@ -71,9 +82,8 @@ func (s *resetCardsServer) redeemPaths() []string {
 func newResetCardsTest(t *testing.T, server *resetCardsServer) (*Client, *resetCardsServer) {
 	t.Helper()
 	accessToken := futureJWT()
-	storage, publicKey, _ := newTestStorage(t, accessToken)
+	storage, _, _ := newTestStorage(t, accessToken)
 	server.t = t
-	server.publicKey = publicKey
 	server.credential = accessToken
 	return NewClient(storage), server
 }

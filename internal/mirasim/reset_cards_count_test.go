@@ -28,6 +28,26 @@ func TestUsableResetCardsCountsOnlyRedeemableCards(t *testing.T) {
 	}
 }
 
+// 查卡随额度一起发起，401 只能作为普通失败返回，不得触发推理通道的票据作废与令牌刷新。
+func TestUsableResetCardsLeavesInferenceCredentialsAloneOn401(t *testing.T) {
+	server := &resetCardsServer{listStatus: http.StatusUnauthorized, cards: `{"error":"unauthorized"}`}
+	client, server := newResetCardsTest(t, server)
+
+	_, _, errCount := client.UsableResetCards(context.Background(), server.host())
+	if errCount == nil {
+		t.Fatal("a rejected reset-card listing must surface as an error")
+	}
+	if len(server.paths) != 1 {
+		t.Fatalf("a 401 must not be retried: %v", server.paths)
+	}
+	client.mu.Lock()
+	refresh := client.refreshRequired
+	client.mu.Unlock()
+	if refresh {
+		t.Fatal("a reset-card 401 must not mark the access token for refresh")
+	}
+}
+
 func TestUsableResetCardsReportsAnUnsupportedRelay(t *testing.T) {
 	server := &resetCardsServer{listStatus: http.StatusNotFound}
 	client, server := newResetCardsTest(t, server)

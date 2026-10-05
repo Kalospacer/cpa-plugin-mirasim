@@ -109,9 +109,7 @@ func (c *Client) ResetQuota(ctx context.Context, client pluginapi.HostHTTPClient
 // route reports supported=false, which is a stable answer rather than an error
 // and is distinguishable from a relay that serves the route with no cards.
 func (c *Client) listResetCards(ctx context.Context, client pluginapi.HostHTTPClient) ([]ResetCard, bool, error) {
-	resp, errDo := c.doControl(ctx, client, http.MethodGet, resetCardsPath, nil, http.Header{
-		"Accept": []string{"application/json"},
-	}, nil, nil)
+	resp, errDo := c.doAccount(ctx, client, http.MethodGet, resetCardsPath)
 	if errDo != nil {
 		return nil, false, errDo
 	}
@@ -144,14 +142,48 @@ func (c *Client) listResetCards(ctx context.Context, client pluginapi.HostHTTPCl
 	return cards, true, nil
 }
 
+// doAccount 以账号登录令牌请求中继的重置卡接口，与官方客户端一致：只带
+// Authorization: Bearer <access token>，不走设备票据与签名，兑换也不带请求体。
+// 中继对设备票据加签名的请求在这组路由上返回 401。
+//
+// 401 原样交给调用方，不作废设备票据、也不标记令牌刷新：这组只读查询随额度一起
+// 发起，若沿用推理通道的 401 恢复逻辑，会反复干扰推理所用的凭证。令牌本身由 CPA
+// 的刷新流程维护，过期时 accessCredentialLocked 会照常报告需要刷新。
+func (c *Client) doAccount(ctx context.Context, client pluginapi.HostHTTPClient, method, requestPath string) (pluginapi.HTTPResponse, error) {
+	if client == nil {
+		return pluginapi.HTTPResponse{}, fmt.Errorf("host HTTP client is required")
+	}
+	endpoint, _, errURL := c.endpoint(requestPath, nil)
+	if errURL != nil {
+		return pluginapi.HTTPResponse{}, errURL
+	}
+	c.mu.Lock()
+	errLoad := c.loadLocked()
+	var accessToken string
+	if errLoad == nil {
+		accessToken, errLoad = c.accessCredentialLocked()
+	}
+	c.mu.Unlock()
+	if errLoad != nil {
+		return pluginapi.HTTPResponse{}, errLoad
+	}
+	return client.Do(ctx, pluginapi.HTTPRequest{
+		Method: method,
+		URL:    endpoint,
+		Headers: http.Header{
+			"Accept":        []string{"application/json"},
+			"Authorization": []string{"Bearer " + accessToken},
+		},
+		WireProfile: c.options.wireProfile(),
+	})
+}
+
 func (c *Client) redeemResetCard(ctx context.Context, client pluginapi.HostHTTPClient, cardID string) (ResetCardResult, error) {
 	requestPath, errPath := resetCardRedeemPath(cardID)
 	if errPath != nil {
 		return ResetCardResult{}, errPath
 	}
-	resp, errDo := c.doControl(ctx, client, http.MethodPost, requestPath, nil, http.Header{
-		"Accept": []string{"application/json"},
-	}, nil, []byte("{}"))
+	resp, errDo := c.doAccount(ctx, client, http.MethodPost, requestPath)
 	if errDo != nil {
 		return ResetCardResult{}, errDo
 	}
