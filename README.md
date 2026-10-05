@@ -46,7 +46,7 @@ plugins:
 | `locale` | 空 | 可选，如 `zh-CN`。 |
 | `relay-url` | `https://relay.mirasim.ai` | 一般不用改。 |
 | `admin-url` | `https://auth.mirasim.ai` | 一般不用改。 |
-| `client-version` | `0.0.372` | 上报的客户端版本。旧凭证在下次保存或刷新时改成这项的值。 |
+| `client-version` | `0.0.403` | 上报的客户端版本。旧凭证在下次保存或刷新时改成这项的值。 |
 
 环境变量依次为 `MIRASIM_OAUTH_LOGIN_PROVIDER`、`MIRASIM_OAUTH_CALLBACK_PORT`、`MIRASIM_COLLECT`、`MIRASIM_LOCALE`、`MIRASIM_RELAY_URL`、`MIRASIM_ADMIN_URL`、`MIRASIM_CLIENT_VERSION`。
 
@@ -108,6 +108,8 @@ docker exec -it <容器名> ./CLIProxyAPI -config <配置文件> --mirasim-login
 
 账号目录含有 GPT 时，CPA 还会列出 `gpt-image-*`。这些是路由别名，账号能否生图由中继决定。`/v1/images/generations` 和 `/v1/images/edits` 会转到 Mirasim，也包括 Codex 的 `/backend-api/codex/images/*`。Codex 压缩请求走 `/v1/responses/compact`，别名是 `/backend-api/codex/responses/compact`。
 
+Kimi 的模型名以中继目录为准，现在是 `kimi-code/k3`。早期版本把它写成 `kimi-k3`，这个写法仍然可用：列表里两个名字都会出现，转发时统一换成 `kimi-code/k3`。同理，模型名里的 `mirasim/` 前缀会被去掉。
+
 用 Claude Code 或 Codex 做一次真实请求来确认。手写的极简 Messages 请求失败，不能说明客户端不可用。插件不读取仓库路径或 Git 信息。
 
 ## 额度
@@ -116,7 +118,9 @@ docker exec -it <容器名> ./CLIProxyAPI -config <配置文件> --mirasim-login
 
 插件页面采用 CPA 额度卡片和时间轴的布局：显示套餐、续期时间（凭证提供时）、账号和模型额度、剩余比例及重置倒计时。进度条表示剩余量，剩余至少 70% 为绿色、至少 30% 为黄色，其余为红色。模型额度单独展示，不会把某个模型用完误读为整个账号用完。
 
-时间轴每个凭证只绘制一条轨道：按周优先使用账号 `7d` 窗口，5 小时模式只使用真实 `5h` 窗口；支持前后日期导航、今天回位和当前时间线，时间按浏览器本地时区显示。灰色和虚线窗口是根据已知重置时间推算的前后周期，不代表历史额度记录或未来用量保证。Mirasim 没有清空额度的接口，主动重置显示为不支持。页面只显示用于识别账号的文件名、邮箱和额度信息，不向浏览器提供访问令牌、刷新令牌或设备私钥。
+时间轴每个凭证只绘制一条轨道：按周优先使用账号 `7d` 窗口，5 小时模式只使用真实 `5h` 窗口；支持前后日期导航、今天回位和当前时间线，时间按浏览器本地时区显示。灰色和虚线窗口是根据已知重置时间推算的前后周期，不代表历史额度记录或未来用量保证。页面只显示用于识别账号的文件名、邮箱和额度信息，不向浏览器提供访问令牌、刷新令牌或设备私钥。
+
+Mirasim 用重置卡清空已经用完的窗口。标准额度页的「重置」会兑换一张：这条路由本身不带参数，所以插件替你挑**最早到期的那张**，把期限更长的卡留到以后。没有可用卡、卡已兑换或已过期时返回一句说明，不会凭空报成功。重置只调用账号接口，不触发推理，也就不计费。
 
 页面不缓存。刷新会再次查询每个 Mirasim 凭证的额度。这些请求不计费，也不会触发推理。
 
@@ -124,11 +128,12 @@ docker exec -it <容器名> ./CLIProxyAPI -config <配置文件> --mirasim-login
 
 ```text
 POST /v0/management/quota/fetch
+POST /v0/management/quota/reset
 GET  /v0/management/plugins/mirasim/quota?auth_index=<序号>
 GET  /v0/management/mirasim/quota?auth_index=<序号>
 ```
 
-最后一条留给仍在使用旧额度卡片的面板，返回原来的 `quota.windows`。
+`POST /v0/management/quota/reset` 由 CPA 提供并转给插件。两条标准路由都只带凭证、不带参数，因此不能指定兑换哪张卡；要逐张挑选得等插件自己的重置路由。最后一条留给仍在使用旧额度卡片的面板，返回原来的 `quota.windows`。
 
 额度页地址里有一段随机路径，插件重载后才会变。谁拿到这个地址，谁就能在重载前查看额度。它会出现在 CPA 日志和浏览器历史里。页面不显示 token、邮箱、设备密钥或凭证序号。
 
