@@ -56,7 +56,9 @@ func (e *Executor) Execute(ctx context.Context, req pluginapi.ExecutorRequest) (
 	if errBuild != nil {
 		return pluginapi.ExecutorResponse{}, errBuild
 	}
-	resp, errDo := client.Do(ctx, req.HTTPClient, http.MethodPost, route.Path, route.Query, requestHeaders(req, route.Format), requestBody)
+	relayHeaders := requestHeaders(req, route.Format)
+	applyClaudeCodeIdentity(relayHeaders, requestBody, false, storage.AccountID)
+	resp, errDo := client.Do(ctx, req.HTTPClient, http.MethodPost, route.Path, route.Query, relayHeaders, requestBody)
 	if errDo != nil {
 		return pluginapi.ExecutorResponse{}, errDo
 	}
@@ -102,7 +104,9 @@ func (e *Executor) ExecuteStream(ctx context.Context, req pluginapi.ExecutorRequ
 	if errBuild != nil {
 		return pluginapi.ExecutorStreamResponse{}, errBuild
 	}
-	resp, errDo := client.DoStream(ctx, req.HTTPClient, http.MethodPost, route.Path, route.Query, requestHeaders(req, route.Format), requestBody)
+	relayHeaders := requestHeaders(req, route.Format)
+	applyClaudeCodeIdentity(relayHeaders, requestBody, false, storage.AccountID)
+	resp, errDo := client.DoStream(ctx, req.HTTPClient, http.MethodPost, route.Path, route.Query, relayHeaders, requestBody)
 	if errDo != nil {
 		return pluginapi.ExecutorStreamResponse{}, errDo
 	}
@@ -121,7 +125,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, req pluginapi.ExecutorRequ
 
 func (e *Executor) CountTokens(ctx context.Context, req pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
 	ctx = mirasim.WithRequestIdentity(ctx, req.Metadata)
-	_, client, errClient := e.client(req.StorageJSON)
+	storage, client, errClient := e.client(req.StorageJSON)
 	if errClient != nil {
 		return pluginapi.ExecutorResponse{}, errClient
 	}
@@ -135,7 +139,9 @@ func (e *Executor) CountTokens(ctx context.Context, req pluginapi.ExecutorReques
 		return pluginapi.ExecutorResponse{}, errNormalize
 	}
 	requestBody = thinkingpkg.NormalizeForWire(requestBody, normalizeModel(req.Model), sdktranslator.FormatClaude.String(), claudeShape(client, req.Model))
-	resp, errDo := client.Do(ctx, req.HTTPClient, http.MethodPost, "/v1/messages/count_tokens", req.Query, requestHeaders(req, sdktranslator.FormatClaude), requestBody)
+	relayHeaders := requestHeaders(req, sdktranslator.FormatClaude)
+	applyClaudeCodeIdentity(relayHeaders, requestBody, true, storage.AccountID)
+	resp, errDo := client.Do(ctx, req.HTTPClient, http.MethodPost, "/v1/messages/count_tokens", req.Query, relayHeaders, requestBody)
 	if errDo != nil {
 		return pluginapi.ExecutorResponse{}, errDo
 	}
@@ -209,6 +215,9 @@ func (e *Executor) HttpRequest(ctx context.Context, req pluginapi.ExecutorHTTPRe
 			return pluginapi.ExecutorHTTPResponse{}, errParse
 		}
 		headers.Set("Accept", "application/json")
+	}
+	if strings.HasPrefix(relayPath, "/v1/messages") {
+		applyClaudeCodeIdentity(headers, body, strings.HasSuffix(relayPath, "/count_tokens"), storage.AccountID)
 	}
 	resp, errDo := client.Do(ctx, req.HTTPClient, method, relayPath, parsed.Query(), headers, body)
 	if errDo != nil {
