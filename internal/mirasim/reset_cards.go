@@ -171,10 +171,19 @@ func (c *Client) redeemResetCard(ctx context.Context, client pluginapi.HostHTTPC
 	}, nil
 }
 
-// soonestActiveResetCard picks the usable card closest to lapsing. Cards the
-// relay still calls active but whose expiry has passed are skipped rather than
-// spent on a redeem the relay would refuse.
-func soonestActiveResetCard(cards []ResetCard, now time.Time) (ResetCard, bool) {
+// UsableResetCards 统计当前可兑换的重置卡张数，判定规则与兑换时选卡一致。
+// supported 为 false 表示中转不提供重置卡接口，此时张数无意义。
+func (c *Client) UsableResetCards(ctx context.Context, client pluginapi.HostHTTPClient) (int, bool, error) {
+	cards, supported, errList := c.listResetCards(ctx, client)
+	if errList != nil || !supported {
+		return 0, supported, errList
+	}
+	return len(usableResetCards(cards, c.nowTime())), true, nil
+}
+
+// usableResetCards 筛出可兑换的卡：中转标记为 active 且尚未过期。
+// 中转仍标 active 但已过期的卡会被跳过，避免兑换时被中转拒绝。
+func usableResetCards(cards []ResetCard, now time.Time) []ResetCard {
 	usable := make([]ResetCard, 0, len(cards))
 	for _, card := range cards {
 		if card.Status != resetCardActive {
@@ -185,6 +194,12 @@ func soonestActiveResetCard(cards []ResetCard, now time.Time) (ResetCard, bool) 
 		}
 		usable = append(usable, card)
 	}
+	return usable
+}
+
+// soonestActiveResetCard picks the usable card closest to lapsing.
+func soonestActiveResetCard(cards []ResetCard, now time.Time) (ResetCard, bool) {
+	usable := usableResetCards(cards, now)
 	if len(usable) == 0 {
 		return ResetCard{}, false
 	}

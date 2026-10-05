@@ -18,6 +18,9 @@ import (
 const (
 	accountGroupName = "Account limits"
 	modelGroupName   = "Model limits"
+
+	// ResetCardsMetricKey 是汇总指标里「可用重置卡张数」的键，配额页按它读取。
+	ResetCardsMetricKey = "reset_cards"
 )
 
 type Provider struct {
@@ -56,11 +59,23 @@ func (p *Provider) FetchQuota(ctx context.Context, req pluginapi.QuotaFetchReque
 	if req.HTTPClient == nil {
 		return pluginapi.QuotaFetchResponse{}, fmt.Errorf("host HTTP client is required")
 	}
-	snapshot, errQuota := p.pool.Client(*storage).FetchQuota(ctx, req.HTTPClient)
+	client := p.pool.Client(*storage)
+	snapshot, errQuota := client.FetchQuota(ctx, req.HTTPClient)
 	if errQuota != nil {
 		return pluginapi.QuotaFetchResponse{}, errQuota
 	}
-	return Normalize(*storage, snapshot), nil
+	response := Normalize(*storage, snapshot)
+	// 可用重置卡张数是额度之外的附加信息：查询失败或中转不支持时只省略这一项，
+	// 不影响额度本身的展示。
+	if cards, supported, errCards := client.UsableResetCards(ctx, req.HTTPClient); errCards == nil && supported {
+		response.Summary = append(response.Summary, pluginapi.QuotaMetric{
+			Key:    ResetCardsMetricKey,
+			Label:  "Reset cards",
+			Value:  float64(cards),
+			Format: "number",
+		})
+	}
+	return response, nil
 }
 
 // ResetQuota spends one Mirasim reset card. Every outcome the relay can report

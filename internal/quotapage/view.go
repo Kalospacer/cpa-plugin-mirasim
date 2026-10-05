@@ -11,6 +11,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	"github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/credentials"
+	"github.com/router-for-me/CLIProxyAPIPlugins/mirasim/internal/quota"
 )
 
 // view.go assembles everything the page renders. The layout mirrors the
@@ -41,6 +42,7 @@ type accountView struct {
 	Plan        string
 	PlanExpires string
 	PlanDays    string
+	ResetCards  string
 	Groups      []limitGroupView
 	Others      []groupView
 	Unavailable bool
@@ -126,7 +128,7 @@ func (p *Page) buildView(ctx context.Context, host HostServices, client pluginap
 }
 
 func (p *Page) accountView(ctx context.Context, host HostServices, client pluginapi.HostHTTPClient, entry pluginapi.HostAuthFileEntry, number int) (accountView, []gridLane) {
-	account := accountView{Number: number}
+	account := accountView{Number: number, ResetCards: "—"}
 	account.Name = strings.TrimSpace(entry.Name)
 	account.Key = entry.AuthIndex
 	account.Email = strings.TrimSpace(entry.Email)
@@ -162,6 +164,13 @@ func (p *Page) accountView(ctx context.Context, host HostServices, client plugin
 	if response.Subscription != nil {
 		if plan := strings.TrimSpace(response.Subscription.Plan); plan != "" {
 			account.Plan = plan
+		}
+	}
+	// 每张可用重置卡对应一次主动重置；没有这项指标说明查卡失败或中转不支持，保持「—」。
+	for _, metric := range response.Summary {
+		if metric.Key == quota.ResetCardsMetricKey {
+			account.ResetCards = fmt.Sprintf("%d 次", int(metric.Value))
+			break
 		}
 	}
 
