@@ -161,11 +161,11 @@ func TestBuildProviderRequestRoutesByModelAndClientProtocol(t *testing.T) {
 	}
 }
 
-// The relay serves "kimi-code/k3". Both the id its catalog publishes and the
-// "kimi-k3" selector earlier plugin releases shipped have to reach it, because
-// asking upstream for the alias would name a model the relay does not serve.
+// The relay serves "kimi-k3". Both the id its catalog publishes and the
+// "kimi-code/k3" selector earlier plugin releases shipped have to reach it,
+// because asking upstream for the older id is refused with HTTP 422.
 func TestKimiSelectorsReachTheRelayModelID(t *testing.T) {
-	for _, model := range []string{"kimi-code/k3", "kimi-k3", "mirasim/kimi-k3"} {
+	for _, model := range []string{"kimi-code/k3", "kimi-k3", "mirasim/kimi-code/k3"} {
 		body, route, errBuild := buildProviderRequest(pluginapi.ExecutorRequest{
 			Model:        model,
 			SourceFormat: sdktranslator.FormatOpenAI.String(),
@@ -182,7 +182,7 @@ func TestKimiSelectorsReachTheRelayModelID(t *testing.T) {
 		if errDecode := json.Unmarshal(body, &decoded); errDecode != nil {
 			t.Fatalf("request body for %q is invalid JSON: %v\n%s", model, errDecode, body)
 		}
-		if decoded["model"] != "kimi-code/k3" {
+		if decoded["model"] != "kimi-k3" {
 			t.Fatalf("model on the wire for %q = %#v", model, decoded["model"])
 		}
 	}

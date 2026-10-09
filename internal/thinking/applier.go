@@ -133,12 +133,13 @@ func parseContextSelector(parsed ParsedModel) ParsedModel {
 // selectorAliases maps a selector this plugin has published onto the model id
 // the relay's own catalog serves.
 //
-// Kimi is the only entry. The relay serves "kimi-code/k3" and earlier plugin
-// releases republished it as "kimi-k3". Both selectors have to keep resolving
-// while exactly one id reaches the relay: asking upstream for the alias would
-// name a model the relay does not serve.
+// Kimi is the only entry. The relay renamed its Kimi entry: its catalog and its
+// Messages route now serve "kimi-k3", and asking for the older "kimi-code/k3"
+// is refused with HTTP 422 ("model ... is not supported at this time"). A
+// caller still configured with the older selector has to keep resolving, while
+// the id the catalog publishes reaches the relay untouched.
 var selectorAliases = map[string]string{
-	"kimi-k3": "kimi-code/k3",
+	"kimi-code/k3": "kimi-k3",
 }
 
 // UpstreamModelID resolves a published selector to the id the relay serves. A

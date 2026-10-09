@@ -27,7 +27,7 @@ var fallbackModelIDs = []string{
 	"gpt-5.6-terra",
 	"deepseek-flash",
 	"glm-5.3-flash",
-	"kimi-code/k3",
+	"kimi-k3",
 }
 
 var imageModelIDs = []string{
@@ -143,7 +143,7 @@ var modelDefinitions = map[string]modelDefinition{
 		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
 		thinking: &pluginapi.ThinkingSupport{DynamicAllowed: true, Levels: []string{"low", "high", "max"}}, modelType: "glm", owner: "z-ai",
 	},
-	"kimi-code/k3": {
+	"kimi-k3": {
 		displayName: "Kimi K3", context: 1048576,
 		description: "Kimi K3 via Mirasim",
 		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
