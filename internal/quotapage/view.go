@@ -31,6 +31,9 @@ type pageView struct {
 	LoadedCount int
 	WeekGrid    gridView
 	HourGrid    gridView
+	// ProbeToken is set only when the host wired the model and executor
+	// services; it gates both the panel and the probe script.
+	ProbeToken string
 }
 
 type accountView struct {
@@ -102,6 +105,9 @@ var weekdayNames = [7]string{"日", "一", "二", "三", "四", "五", "六"}
 
 func (p *Page) buildView(ctx context.Context, host HostServices, client pluginapi.HostHTTPClient) pageView {
 	view := pageView{ReadAt: time.Now().UTC().Format("2006-01-02 15:04 MST")}
+	if p.probes != nil && p.services.Models != nil && p.services.Executor != nil {
+		view.ProbeToken = p.probes.token
+	}
 	entries, errList := host.ListAuth(ctx)
 	if errList != nil {
 		view.Problem = problemCredentialList

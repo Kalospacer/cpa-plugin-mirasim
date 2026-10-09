@@ -32,6 +32,60 @@ type executorHostClient struct {
 // tests exercise the same attribution block a real request carries.
 const executorTestClientVersion = "0.0.354"
 
+func TestRosterKeepsBuiltinRelayEfforts(t *testing.T) {
+	client := mirasim.NewClient(executorTestStorage(t))
+	host := executorHostClient{do: func(_ context.Context, req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
+		path, _ := url.Parse(req.URL)
+		switch path.Path {
+		case "/v1/device/session":
+			return pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"ticket":"ticket","expiresIn":900}`)}, nil
+		case "/v1/model-roster":
+			// The official 0.0.426 roster omits adaptive on these agent entries.
+			return pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"version":"parity-426","agents":{
+				"dsh":[{"id":"deepseek-flash","contextWindow":1000000,"effort":["off","low","high","max"]}],
+				"kimi":[{"id":"kimi-k3","contextWindow":1048576,"effort":["low","high","max"]}],
+				"zcode":[{"id":"glm-5.3-flash","contextWindow":1000000,"effort":["low","high","max"]}]
+			}}`)}, nil
+		default:
+			return pluginapi.HTTPResponse{}, fmt.Errorf("unexpected path %s", path.Path)
+		}
+	}}
+	if roster := client.ModelRoster(context.Background(), host); roster.Version == "" {
+		t.Fatal("roster was not loaded")
+	}
+	// kimi-k3 is the id the relay serves; kimi-code/k3 is the older selector
+	// earlier releases published, which still has to resolve onto it.
+	for _, model := range []string{"deepseek-flash", "kimi-k3", "kimi-code/k3", "glm-5.3-flash"} {
+		levels := []string{"low", "high", "max"}
+		if model == "deepseek-flash" {
+			levels = append(levels, "off")
+		}
+		for _, effort := range levels {
+			for _, suffix := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/suffix=%t", model, effort, suffix), func(t *testing.T) {
+					selector := model
+					payload := `{"messages":[{"role":"user","content":"hello"}],"max_tokens":200000}`
+					if suffix {
+						selector += "(" + effort + ")"
+					} else {
+						payload = strings.TrimSuffix(payload, "}") + `,"output_config":{"effort":"` + effort + `"}}`
+					}
+					body, route, err := buildProviderRequest(pluginapi.ExecutorRequest{Model: selector, Format: sdktranslator.FormatClaude.String(), Payload: []byte(payload)}, true, claudeShape(client, selector), executorTestClientVersion)
+					if err != nil || route.Path != "/v1/messages" {
+						t.Fatalf("route=%+v err=%v", route, err)
+					}
+					if got := gjson.GetBytes(body, "output_config.effort").String(); got != effort || gjson.GetBytes(body, "thinking.budget_tokens").Exists() {
+						t.Fatalf("roster changed the requested effort: %s", body)
+					}
+					if effort == "off" && gjson.GetBytes(body, "thinking").Exists() {
+						t.Fatalf("off still enables thinking: %s", body)
+					}
+				})
+			}
+		}
+	}
+}
+
 func (c executorHostClient) Do(ctx context.Context, req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
 	return c.do(ctx, req)
 }

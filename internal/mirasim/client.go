@@ -899,8 +899,9 @@ func parseCatalogEntry(item json.RawMessage) (RemoteModel, bool) {
 }
 
 // servableModels keeps the entries the account can actually address, the same
-// way the official client narrows the same response. A reserved placeholder and
-// a namespaced ID name no model, and a dated twin such as
+// way the official client narrows the same response. Reserved placeholders and
+// namespaced IDs from other catalogs name no relay model; the relay serves Kimi
+// as "kimi-k3", a plain ID with no namespace. A dated twin such as
 // claude-haiku-4-5-20251001 is dropped when the plain ID it duplicates is
 // served beside it, so a caller is not offered the same model twice.
 func servableModels(parsed []RemoteModel) []RemoteModel {

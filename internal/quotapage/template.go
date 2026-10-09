@@ -40,6 +40,13 @@ var pageCSS string
 //go:embed page.js
 var pageJS string
 
+// probe.js drives the model-availability panel. It is embedded separately
+// from page.js because the panel is only published when the host wired the
+// model and executor services.
+//
+//go:embed probe.js
+var probeScript string
+
 func renderResponse(status int, view pageView) (pluginapi.ManagementResponse, error) {
 	if view.ReadAt == "" {
 		view.ReadAt = time.Now().UTC().Format("2006-01-02 15:04 MST")
@@ -58,7 +65,9 @@ func pageHeaders(nonce string) http.Header {
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'")
+	// connect-src 'self' is what lets the probe panel reach this same page
+	// route; every other fetch target stays blocked.
+	h.Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'")
 	return h
 }
 
@@ -70,4 +79,5 @@ var pageTemplate = template.Must(template.New("mirasim-quota").Funcs(template.Fu
 	// 仅信任编译时固定资源；凭证字段始终走 html/template 的默认转义。
 	"pageCSS": func() template.CSS { return template.CSS(pageCSS) },
 	"pageJS":  func() template.JS { return template.JS(pageJS) },
+	"probeScript": func() template.JS { return template.JS(probeScript) },
 }).Parse(pageHTML))

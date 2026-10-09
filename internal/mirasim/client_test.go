@@ -853,6 +853,15 @@ func TestParseModelCatalogOffersEachServableModelOnce(t *testing.T) {
 	}
 }
 
+// The relay serves Kimi as "kimi-k3", which carries no namespace. A namespaced
+// entry from another catalog is not a Mirasim model, whatever it names.
+func TestParseModelCatalogDropsNamespacedIDs(t *testing.T) {
+	models, err := ParseModelCatalog([]byte(`{"data":[{"id":"kimi-k3"},{"id":"kimi-code/k3"},{"id":"openrouter/kimi-code/k3"}]}`))
+	if err != nil || len(models) != 1 || models[0].ID != "kimi-k3" {
+		t.Fatalf("Kimi catalog=%+v err=%v", models, err)
+	}
+}
+
 func TestPrepareHeadersDropsClientCredentials(t *testing.T) {
 	auth := http.Header{"Authorization": []string{"Bearer ticket"}, "X-Mirasim-Enc": []string{"sealed"}}
 	headers := prepareHeaders(http.Header{

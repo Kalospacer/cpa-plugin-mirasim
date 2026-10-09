@@ -12,13 +12,12 @@ import (
 )
 
 var fallbackModelIDs = []string{
-	"claude-fable-5",
 	"claude-fable-5-1",
 	"claude-haiku-4-5",
 	"claude-opus-4-8",
 	"claude-opus-5",
 	"claude-opus-5-5",
-	"claude-sonnet-5",
+	"claude-sonnet-5-5",
 	"gpt-6-astra",
 	"gpt-6-luna",
 	"gpt-6-sol",
@@ -28,6 +27,7 @@ var fallbackModelIDs = []string{
 	"deepseek-flash",
 	"glm-5.3-flash",
 	"kimi-code/k3",
+	"gemini-3.1-pro-preview",
 }
 
 var imageModelIDs = []string{
@@ -97,6 +97,12 @@ var modelDefinitions = map[string]modelDefinition{
 		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
 		thinking: adaptiveRelayThinking(), modelType: "claude", owner: "anthropic",
 	},
+	"claude-sonnet-5-5": {
+		displayName: "Claude Sonnet 5.5", context: 1000000, output: 128000,
+		description: "Anthropic Sonnet 5.5 via Mirasim",
+		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
+		thinking: adaptiveRelayThinking(), modelType: "claude", owner: "anthropic",
+	},
 	// Context windows come from the official 0.0.403 builtin agent catalog,
 	// the table used when the relay publishes none. Astra is 0x100590. GPT 6
 	// Sol, GPT 6 Luna and the GPT 5.6 models are 0xd4e40. The desktop
@@ -149,6 +155,12 @@ var modelDefinitions = map[string]modelDefinition{
 		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking", "output_config"},
 		thinking: &pluginapi.ThinkingSupport{DynamicAllowed: true, Levels: []string{"low", "high", "max"}}, modelType: "kimi", owner: "moonshot",
 	},
+	"gemini-3.1-pro-preview": {
+		displayName: "Gemini 3.1 Pro", context: 1048576, output: 65536,
+		description: "Google Gemini 3.1 Pro via Mirasim Messages",
+		methods:     []string{"messages", "countTokens"}, parameters: []string{"max_tokens", "stop_sequences", "tools", "tool_choice", "thinking"},
+		thinking: &pluginapi.ThinkingSupport{Min: 1024, Max: 65535, ZeroAllowed: true, DynamicAllowed: true, Levels: []string{"off", "minimal", "low", "medium", "high"}}, modelType: "gemini", owner: "google",
+	},
 }
 
 type Provider struct {
@@ -181,21 +193,39 @@ func (p *Provider) ModelsForAuth(ctx context.Context, req pluginapi.AuthModelReq
 	client := p.pool.Client(*storage)
 	catalog, errCatalog := client.ListModels(ctx, req.HTTPClient)
 	var models []pluginapi.ModelInfo
-	var roster mirasim.ModelRoster
+	// Withdrawals can still be fetched when the account catalog is unavailable.
+	roster := client.ModelRoster(ctx, req.HTTPClient)
 	if errCatalog == nil {
 		models = exposedModels(catalog.Models)
-		roster = client.ModelRoster(ctx, req.HTTPClient)
 	} else if cached := client.CachedModels(); len(cached) > 0 {
 		catalog.Models = cached
 		models = exposedModels(cached)
-		roster = client.CachedModelRoster()
 	} else {
 		models = fallbackModels()
-		roster = client.CachedModelRoster()
 	}
+	models = withoutWithdrawn(models, roster)
 	applyRoster(models, roster)
 	applyCatalogContexts(models, catalog.Models)
-	return pluginapi.ModelResponse{Provider: credentials.Provider, Models: publishModels(models)}, nil
+	return pluginapi.ModelResponse{Provider: credentials.Provider, Models: withoutWithdrawn(publishModels(models), roster)}, nil
+}
+
+// Filter after creating aliases so image and long-context selectors cannot
+// reintroduce a withdrawn model. Resolve both sides to the same upstream ID.
+func withoutWithdrawn(models []pluginapi.ModelInfo, roster mirasim.ModelRoster) []pluginapi.ModelInfo {
+	if len(roster.Withdrawn) == 0 {
+		return models
+	}
+	withdrawn := make(map[string]bool, len(roster.Withdrawn))
+	for _, id := range roster.Withdrawn {
+		withdrawn[strings.ToLower(thinkingpkg.ParseModel(id).ModelName)] = true
+	}
+	kept := models[:0]
+	for _, model := range models {
+		if !withdrawn[strings.ToLower(thinkingpkg.ParseModel(model.ID).ModelName)] {
+			kept = append(kept, model)
+		}
+	}
+	return kept
 }
 
 // publishModels adds the selectors a caller may already hold on top of the
@@ -281,7 +311,7 @@ func isExposedModel(id string) bool {
 		return false
 	}
 	return strings.HasPrefix(id, "claude-") || strings.HasPrefix(id, "gpt-") ||
-		strings.HasPrefix(id, "deepseek-") || strings.HasPrefix(id, "glm-") || strings.HasPrefix(id, "kimi-")
+		strings.HasPrefix(id, "deepseek-") || strings.HasPrefix(id, "glm-") || strings.HasPrefix(id, "kimi-") || strings.HasPrefix(id, "gemini-")
 }
 
 func modelInfo(id, object string, created int64, owner string) pluginapi.ModelInfo {
@@ -320,12 +350,13 @@ func modelInfo(id, object string, created int64, owner string) pluginapi.ModelIn
 		ContextLength:              definition.context,
 		MaxCompletionTokens:        definition.output,
 		SupportedParameters:        cloneStrings(definition.parameters),
-		SupportedInputModalities:   []string{"text"},
-		SupportedOutputModalities:  []string{"text"},
-		Thinking:                   cloneThinking(definition.thinking),
+		// The official built-in provider declares text and image input for
+		// relay models. CPA copies this field into its model registry.
+		SupportedInputModalities:  []string{"text", "image"},
+		SupportedOutputModalities: []string{"text"},
+		Thinking:                  cloneThinking(definition.thinking),
 	}
 	if definition.modelType == "openai-image" {
-		model.SupportedInputModalities = []string{"text", "image"}
 		model.SupportedOutputModalities = []string{"image"}
 	}
 	return model
@@ -336,7 +367,7 @@ func genericDefinition(id string) modelDefinition {
 	if strings.HasPrefix(id, "gpt-image-") {
 		return modelDefinition{modelType: "openai-image", methods: []string{"images/generations", "images/edits"}, owner: "openai"}
 	}
-	if strings.HasPrefix(id, "claude-") || strings.HasPrefix(id, "deepseek-") || strings.HasPrefix(id, "glm-") || strings.HasPrefix(id, "kimi-") {
+	if strings.HasPrefix(id, "claude-") || strings.HasPrefix(id, "deepseek-") || strings.HasPrefix(id, "glm-") || strings.HasPrefix(id, "kimi-") || strings.HasPrefix(id, "gemini-") {
 		modelType := "claude"
 		switch {
 		case strings.HasPrefix(id, "deepseek-"):
@@ -345,6 +376,8 @@ func genericDefinition(id string) modelDefinition {
 			modelType = "glm"
 		case strings.HasPrefix(id, "kimi-"):
 			modelType = "kimi"
+		case strings.HasPrefix(id, "gemini-"):
+			modelType = "gemini"
 		}
 		return modelDefinition{
 			modelType: modelType, methods: []string{"messages", "countTokens"},
