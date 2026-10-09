@@ -241,7 +241,7 @@ func TestCatalogPublishesGeminiMessagesModel(t *testing.T) {
 func TestPublishedRelayModelsAndAliasesDeclareImageInput(t *testing.T) {
 	models := publishModels(exposedModels([]mirasim.RemoteModel{
 		{ID: "claude-opus-5-5"}, {ID: "gpt-6-astra"}, {ID: "gpt-6.1-sol"},
-		{ID: "deepseek-flash"}, {ID: "kimi-code/k3"}, {ID: "glm-5.3-flash"}, {ID: "gemini-3.1-pro-preview"},
+		{ID: "deepseek-flash"}, {ID: "kimi-k3"}, {ID: "glm-5.3-flash"}, {ID: "gemini-3.1-pro-preview"},
 	}))
 	seen := make(map[string]bool)
 	for _, model := range models {
@@ -257,7 +257,7 @@ func TestPublishedRelayModelsAndAliasesDeclareImageInput(t *testing.T) {
 			t.Errorf("%s output modalities=%v, want %s", model.ID, model.SupportedOutputModalities, wantOutput)
 		}
 	}
-	for _, alias := range []string{"claude-opus-5-5[1m]", "kimi-k3", "gpt-image-2"} {
+	for _, alias := range []string{"claude-opus-5-5[1m]", "kimi-code/k3", "gpt-image-2"} {
 		if !seen[alias] {
 			t.Errorf("missing alias %s", alias)
 		}
@@ -267,8 +267,8 @@ func TestPublishedRelayModelsAndAliasesDeclareImageInput(t *testing.T) {
 func TestFallbackCatalogCoversOfficialBuiltinFamilies(t *testing.T) {
 	models := publishModels(fallbackModels())
 	// Every fallback id, plus five [1m] selectors for the million-token Claude
-	// models, five gpt-image routes, and the "kimi-k3" selector earlier
-	// releases published for "kimi-code/k3".
+	// models, five gpt-image routes, and the "kimi-code/k3" selector earlier
+	// releases published for "kimi-k3".
 	if len(models) != len(fallbackModelIDs)+5+5+1 {
 		t.Fatalf("model count = %d, want %d: %v", len(models), len(fallbackModelIDs)+5+5+1, modelIDs(models))
 	}
@@ -337,14 +337,14 @@ func TestFallbackCatalogCoversOfficialBuiltinFamilies(t *testing.T) {
 	if glm := byID["glm-5.3-flash"]; glm.Type != "glm" || glm.ContextLength != 1000000 || glm.MaxCompletionTokens != 0 {
 		t.Fatalf("GLM metadata = %#v", glm)
 	}
-	// The relay serves "kimi-code/k3". The plugin also keeps publishing the
-	// "kimi-k3" selector older releases shipped, and both entries have to
+	// The relay serves "kimi-k3". The plugin also keeps publishing the
+	// "kimi-code/k3" selector older releases shipped, and both entries have to
 	// carry the same metadata so a caller holding either one is unaffected.
-	kimi := byID["kimi-code/k3"]
+	kimi := byID["kimi-k3"]
 	if kimi.Type != "kimi" || kimi.ContextLength != 1048576 || kimi.MaxCompletionTokens != 0 {
 		t.Fatalf("Kimi metadata = %#v", kimi)
 	}
-	alias := byID["kimi-k3"]
+	alias := byID["kimi-code/k3"]
 	if alias.Type != kimi.Type || alias.ContextLength != kimi.ContextLength ||
 		alias.MaxCompletionTokens != kimi.MaxCompletionTokens || alias.DisplayName != kimi.DisplayName ||
 		len(alias.Thinking.Levels) != len(kimi.Thinking.Levels) {

@@ -110,7 +110,7 @@ Gemini 3.1 Pro 使用 `gemini-3.1-pro-preview`，通过 Mirasim 的 Messages 接
 
 账号目录含有 GPT 时，CPA 还会列出 `gpt-image-*`。这些是路由别名，账号能否生图由中继决定。`/v1/images/generations` 和 `/v1/images/edits` 会转到 Mirasim，也包括 Codex 的 `/backend-api/codex/images/*`。Codex 压缩请求走 `/v1/responses/compact`，别名是 `/backend-api/codex/responses/compact`。
 
-Kimi 的模型名以中继目录为准，现在是 `kimi-code/k3`。早期版本把它写成 `kimi-k3`，这个写法仍然可用：列表里两个名字都会出现，转发时统一换成 `kimi-code/k3`。同理，模型名里的 `mirasim/` 前缀会被去掉。
+Kimi 的模型名以中继目录为准，现在是 `kimi-k3`。早期版本把它写成 `kimi-code/k3`，这个写法仍然可用：列表里两个名字都会出现，转发时统一换成 `kimi-k3`。同理，模型名里的 `mirasim/` 前缀会被去掉。
 
 中继的 Claude 入口只接受 Claude Code 客户端，其他 User-Agent 会收到 403 `this client is not supported`。调用方不是 Claude Code 时，插件按 CPA 的默认 Claude Code 画像补齐身份请求头（`User-Agent: claude-cli/2.1.280 (external, cli)` 以及配套的 `X-Stainless-*`、`X-App` 等）；调用方本身就是 Claude Code 时保留它自己的值。这只作用于 `claude-*` 模型，GPT、DeepSeek、GLM、Kimi 不受影响。
 
