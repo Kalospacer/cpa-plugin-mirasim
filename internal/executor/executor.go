@@ -392,7 +392,13 @@ func translateNonStream(ctx context.Context, from, to sdktranslator.Format, mode
 		return nil, fmt.Errorf("Mirasim executor cannot translate response %s -> %s", from, to)
 	}
 	var state any
-	return registry.TranslateNonStream(ctx, from, to, model, originalRequest, translatedRequest, body, &state), nil
+	translated := registry.TranslateNonStream(ctx, from, to, model, originalRequest, translatedRequest, body, &state)
+	if from == sdktranslator.FormatClaude {
+		var measured reportedReasoningUsage
+		measured.observe(body)
+		translated = measured.apply(translated, to)
+	}
+	return translated, nil
 }
 
 func translateStream(ctx context.Context, from, to sdktranslator.Format, model string, originalRequest, translatedRequest []byte, input <-chan pluginapi.HTTPStreamChunk) <-chan pluginapi.ExecutorStreamChunk {
@@ -411,6 +417,7 @@ func translateStream(ctx context.Context, from, to sdktranslator.Format, model s
 		}
 		var pending []byte
 		var state any
+		var measured reportedReasoningUsage
 		var terminal, streamFailed bool
 		translateLine := func(raw []byte) bool {
 			line := bytes.TrimRight(raw, "\r\n")
@@ -428,6 +435,7 @@ func translateStream(ctx context.Context, from, to sdktranslator.Format, model s
 				}
 			}
 			if from == sdktranslator.FormatClaude {
+				measured.observe(line)
 				ended, errEvent := messagesStreamEvent(line)
 				terminal = terminal || ended
 				// CPA observes failures through Err; a translator can otherwise
@@ -445,6 +453,9 @@ func translateStream(ctx context.Context, from, to sdktranslator.Format, model s
 			for _, frame := range frames {
 				if len(frame) == 0 {
 					continue
+				}
+				if from == sdktranslator.FormatClaude {
+					frame = measured.apply(frame, to)
 				}
 				if !sendChunk(ctx, output, pluginapi.ExecutorStreamChunk{Payload: append([]byte(nil), frame...)}) {
 					return false
