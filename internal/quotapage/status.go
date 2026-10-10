@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,7 +25,6 @@ const (
 	statusURL          = "https://mirasim.ai/api/status"
 	statusCacheTTL     = time.Minute
 	statusFetchTimeout = 8 * time.Second
-	statusCellCount    = 48
 )
 
 // The document mirrors schema 2 of /api/status; fields the panel does not
@@ -33,6 +33,8 @@ const (
 // cells values are per-mille availability (0–1000), -1 meaning no data.
 type statusDoc struct {
 	GeneratedAt string           `json:"generatedAt"`
+	CellsStart  string           `json:"cellsStart"`
+	CellSeconds int              `json:"cellSeconds"`
 	Thresholds  statusThresholds `json:"thresholds"`
 	Cohorts     []statusCohort   `json:"cohorts"`
 	Notes       []string         `json:"notes"`
@@ -131,7 +133,8 @@ type statusAgentView struct {
 	P50        string
 	P95        string
 	Same       string
-	BarCells   []string
+	BarTitle   string
+	BarCells   []statusCellView
 	BarUptime  string
 	ReasonNote string
 	IntelNote  string
@@ -147,7 +150,15 @@ type statusRowView struct {
 	D7         string
 	P50        string
 	SameModel  string
-	BarCells   []string
+	BarTitle   string
+	BarCells   []statusCellView
+}
+
+// statusCellView is one half-hour slot of the availability bar: a colour
+// class plus the official hover text (Beijing-time slot and availability).
+type statusCellView struct {
+	Class string
+	Title string
 }
 
 // statusCohortMeta fixes the display order and wording the official page
@@ -173,12 +184,14 @@ var statusCache = struct {
 	doc *statusDoc
 }{}
 
-func fetchStatusDoc(ctx context.Context, client pluginapi.HostHTTPClient) (*statusDoc, error) {
-	statusCache.mu.Lock()
-	doc, at := statusCache.doc, statusCache.at
-	statusCache.mu.Unlock()
-	if doc != nil && time.Since(at) < statusCacheTTL {
-		return doc, nil
+func fetchStatusDoc(ctx context.Context, client pluginapi.HostHTTPClient, bust bool) (*statusDoc, error) {
+	if !bust {
+		statusCache.mu.Lock()
+		doc, at := statusCache.doc, statusCache.at
+		statusCache.mu.Unlock()
+		if doc != nil && time.Since(at) < statusCacheTTL {
+			return doc, nil
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, statusFetchTimeout)
@@ -208,15 +221,16 @@ func fetchStatusDoc(ctx context.Context, client pluginapi.HostHTTPClient) (*stat
 // statusViewFor turns the official document into the panel's view model. A
 // failed fetch only marks this one panel; the quota cards around it render
 // normally.
-func statusViewFor(ctx context.Context, client pluginapi.HostHTTPClient) statusView {
+func statusViewFor(ctx context.Context, client pluginapi.HostHTTPClient, bust bool) statusView {
 	if client == nil {
 		return statusView{Problem: problemStatusFetch}
 	}
-	doc, err := fetchStatusDoc(ctx, client)
+	doc, err := fetchStatusDoc(ctx, client, bust)
 	if err != nil {
 		return statusView{Problem: problemStatusFetch}
 	}
 	view := statusView{GeneratedAt: statusGeneratedAt(doc.GeneratedAt), Notes: doc.Notes}
+	bars := statusBarClock{start: statusCellsStart(doc.CellsStart), seconds: doc.CellSeconds, thresholds: doc.Thresholds}
 	byID := make(map[string]statusCohort, len(doc.Cohorts))
 	for _, cohort := range doc.Cohorts {
 		byID[cohort.ID] = cohort
@@ -228,7 +242,7 @@ func statusViewFor(ctx context.Context, client pluginapi.HostHTTPClient) statusV
 			continue
 		}
 		seen[meta.ID] = true
-		view.Cohorts = append(view.Cohorts, cohortViewFor(cohort, meta, doc.Thresholds))
+		view.Cohorts = append(view.Cohorts, cohortViewFor(cohort, meta, bars))
 	}
 	for _, cohort := range doc.Cohorts {
 		if !seen[cohort.ID] {
@@ -236,7 +250,7 @@ func statusViewFor(ctx context.Context, client pluginapi.HostHTTPClient) statusV
 				ID    string
 				Title string
 				Desc  string
-			}{ID: cohort.ID, Title: cohort.ID}, doc.Thresholds))
+			}{ID: cohort.ID, Title: cohort.ID}, bars))
 		}
 	}
 	return view
@@ -246,7 +260,7 @@ func cohortViewFor(cohort statusCohort, meta struct {
 	ID    string
 	Title string
 	Desc  string
-}, thresholds statusThresholds) statusCohortView {
+}, bars statusBarClock) statusCohortView {
 	view := statusCohortView{ID: meta.ID, Title: meta.Title, Desc: meta.Desc}
 	// A cohort counting nothing yet still gets its block, with the state the
 	// API reported instead of an empty table.
@@ -255,12 +269,12 @@ func cohortViewFor(cohort statusCohort, meta struct {
 		view.StateNote = "此分组" + label + "。"
 	}
 	for _, agent := range cohort.Agents {
-		view.Agents = append(view.Agents, agentViewFor(agent, thresholds))
+		view.Agents = append(view.Agents, agentViewFor(agent, bars))
 	}
 	return view
 }
 
-func agentViewFor(agent statusAgent, thresholds statusThresholds) statusAgentView {
+func agentViewFor(agent statusAgent, bars statusBarClock) statusAgentView {
 	name := strings.TrimSpace(agent.Name)
 	if name == "" {
 		name = agent.ID
@@ -276,11 +290,12 @@ func agentViewFor(agent statusAgent, thresholds statusThresholds) statusAgentVie
 		P50:       statusLatencyText(summary.Latency.P50),
 		P95:       statusLatencyText(summary.Latency.P95),
 		Same:      statusPercent(summary.SameModel),
-		BarCells:  statusCellClasses(summary.Cells, thresholds),
+		BarTitle:  statusBarTitle(name, summary.Availability.H24, summary.Cells, bars.thresholds),
+		BarCells:  bars.cells(summary.Cells),
 	}
 	// 汇总条中央的标注就是官方页面显示的 24 小时可用率。
 	if summary.Availability.H24 != nil {
-		view.BarUptime = fmt.Sprintf("%.1f%% 可用", *summary.Availability.H24)
+		view.BarUptime = statusAvailability(*summary.Availability.H24) + " 可用"
 	}
 	// 官方页面会给非正常的智能体标出近 1 小时失败原因。
 	if class != "ok" && len(agent.Reasons) > 0 {
@@ -320,7 +335,8 @@ func agentViewFor(agent statusAgent, thresholds statusThresholds) statusAgentVie
 			D7:        statusPercent(model.Availability.D7),
 			P50:       statusLatencyText(model.Latency.P50),
 			SameModel: statusPercent(model.SameModel),
-			BarCells:  statusCellClasses(model.Cells, thresholds),
+			BarTitle:  statusBarTitle(modelName, model.Availability.H24, model.Cells, bars.thresholds),
+			BarCells:  bars.cells(model.Cells),
 		})
 	}
 	return view
@@ -363,12 +379,75 @@ func agentBadge(status string) (class, label string) {
 	}
 }
 
-// statusCellClasses maps one 24-hour cell row to the official bar's colour
-// classes: per-mille availability ≥ good·10 is ok, ≥ warn·10 is warn, lower
-// is down, and negative values mark cells with no data.
-func statusCellClasses(cells []int, thresholds statusThresholds) []string {
+// statusBarClock carries what every availability bar needs to colour and
+// caption its cells: the cell grid's start instant, slot width and the
+// good/warn thresholds the API reports.
+type statusBarClock struct {
+	start      time.Time
+	seconds    int
+	thresholds statusThresholds
+}
+
+// cells maps one 24-hour cell row to view cells: per-mille availability ≥
+// good·10 is ok, ≥ warn·10 is warn, lower is down, negative marks a slot
+// with no data. The hover title mirrors the official page: the slot's
+// Beijing-time range and its availability.
+func (b statusBarClock) cells(cells []int) []statusCellView {
 	if len(cells) == 0 {
 		return nil
+	}
+	good, warn := 990, 950
+	if b.thresholds.Good != nil {
+		good = int(*b.thresholds.Good * 10)
+	}
+	if b.thresholds.Warn != nil {
+		warn = int(*b.thresholds.Warn * 10)
+	}
+	out := make([]statusCellView, 0, len(cells))
+	for i, cell := range cells {
+		var class string
+		switch {
+		case cell < 0:
+			class = "none"
+		case cell >= good:
+			class = "ok"
+		case cell >= warn:
+			class = "warn"
+		default:
+			class = "down"
+		}
+		out = append(out, statusCellView{Class: class, Title: b.title(i, cell)})
+	}
+	return out
+}
+
+// title renders one cell's official hover text: "05:30–06:00 北京时间 · 可用率
+// 98.5%". A slot with no data reports 100% there, the same quirk the
+// official page has, while still drawing grey.
+func (b statusBarClock) title(index, cell int) string {
+	availability := cell
+	if availability < 0 {
+		availability = 1000
+	}
+	pct := statusAvailability(float64(availability) / 10)
+	if b.start.IsZero() || b.seconds <= 0 {
+		return "可用率 " + pct
+	}
+	begin := b.start.Add(time.Duration(index*b.seconds) * time.Second)
+	end := begin.Add(time.Duration(b.seconds) * time.Second)
+	return statusBeijingHM(begin) + "–" + statusBeijingHM(end) + " 北京时间 · 可用率 " + pct
+}
+
+// statusBarTitle builds the whole-bar hover summary the official page shows:
+// name, 24-hour availability and the ok/warn/down counts across the slots.
+// Slots with no data count as ok, the same quirk the official page has.
+func statusBarTitle(name string, h24 *float64, cells []int, thresholds statusThresholds) string {
+	if len(cells) == 0 {
+		return ""
+	}
+	uptime := 100.0
+	if h24 != nil {
+		uptime = *h24
 	}
 	good, warn := 990, 950
 	if thresholds.Good != nil {
@@ -377,20 +456,19 @@ func statusCellClasses(cells []int, thresholds statusThresholds) []string {
 	if thresholds.Warn != nil {
 		warn = int(*thresholds.Warn * 10)
 	}
-	classes := make([]string, 0, len(cells))
+	var ok, degraded, down int
 	for _, cell := range cells {
 		switch {
-		case cell < 0:
-			classes = append(classes, "none")
-		case cell >= good:
-			classes = append(classes, "ok")
+		case cell < 0 || cell >= good:
+			ok++
 		case cell >= warn:
-			classes = append(classes, "warn")
+			degraded++
 		default:
-			classes = append(classes, "down")
+			down++
 		}
 	}
-	return classes
+	return fmt.Sprintf("%s 最近 24 小时可用率 %s。%d 个 30 分钟时段中：正常 %d，不稳定 %d，异常 %d。",
+		name, statusAvailability(uptime), len(cells), ok, degraded, down)
 }
 
 // statusReasonLabel maps the status page's failure classes to its own zh
@@ -426,28 +504,55 @@ func statusWindowLabel(window string) string {
 	}
 }
 
-// statusShare renders a failure/change share the official way: whole
-// percentages, and "<1%" for sub-percent noise instead of "0%".
+// statusShare renders a failure/change share the official way: "<1%" for
+// sub-percent noise, integers whole, everything else one decimal.
 func statusShare(share float64) string {
 	if share > 0 && share < 1 {
 		return "<1%"
 	}
-	return fmt.Sprintf("%.0f%%", share)
+	if share == math.Trunc(share) {
+		return fmt.Sprintf("%.0f%%", share)
+	}
+	return fmt.Sprintf("%.1f%%", share)
+}
+
+// statusAvailability formats a percentage the official way: 100 shows as
+// "100%", everything else keeps one decimal.
+func statusAvailability(value float64) string {
+	if value >= 100 {
+		return "100%"
+	}
+	return fmt.Sprintf("%.1f%%", value)
 }
 
 func statusPercent(value *float64) string {
 	if value == nil {
 		return "—"
 	}
-	return fmt.Sprintf("%.1f%%", *value)
+	return statusAvailability(*value)
 }
 
-// statusLatencyText renders the first-token latency the API reports, in seconds.
+// statusLatencyText renders the first-token latency the API reports, in
+// seconds.
 func statusLatencyText(value *float64) string {
 	if value == nil {
 		return "—"
 	}
 	return fmt.Sprintf("%.1f s", *value)
+}
+
+// statusBeijingHM formats an instant as HH:MM Beijing time (UTC+8) the way
+// the official page labels its cells.
+func statusBeijingHM(value time.Time) string {
+	return value.Add(8 * time.Hour).UTC().Format("15:04")
+}
+
+func statusCellsStart(raw string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
 }
 
 func statusGeneratedAt(raw string) string {

@@ -132,6 +132,17 @@
       try { sessionStorage.setItem('mq-status-open', statusPanel.open ? '1' : '0'); } catch {}
     });
   }
+  // 「刷新数据」绕过状态接口的一分钟缓存重拉官方数据；参数用完即擦，免得留在地址栏。
+  const refreshURL = new URL(window.location.href);
+  if (refreshURL.searchParams.get('refresh') === 'status') {
+    refreshURL.searchParams.delete('refresh');
+    history.replaceState(null, '', refreshURL);
+  }
+  document.querySelector('[data-status-refresh]')?.addEventListener('click', () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('refresh', 'status');
+    location.replace(url);
+  });
   // 模型可用性的三组服务切换，与「按周 / 5小时」同一套 pills 交互。
   const cohortTabs = [...document.querySelectorAll('[data-cohort]')];
   const cohortPanels = [...document.querySelectorAll('[data-cohort-panel]')];

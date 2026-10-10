@@ -14,6 +14,8 @@ import (
 const statusFixture = `{
 	"schema": 2,
 	"generatedAt": "2026-10-10T04:48:01.880Z",
+	"cellsStart": "2026-10-09T05:00:00.000Z",
+	"cellSeconds": 1800,
 	"thresholds": {"good": 99, "warn": 95, "minTurns": 20},
 	"cohorts": [
 		{
@@ -114,7 +116,7 @@ func resetStatusCache(t *testing.T) {
 
 func TestStatusViewOrdersCohortsLikeTheOfficialPage(t *testing.T) {
 	resetStatusCache(t)
-	view := statusViewFor(context.Background(), fixtureStatusClient())
+	view := statusViewFor(context.Background(), fixtureStatusClient(), false)
 
 	if len(view.Cohorts) != 3 {
 		t.Fatalf("cohorts = %d, want 3", len(view.Cohorts))
@@ -153,9 +155,22 @@ func TestStatusViewOrdersCohortsLikeTheOfficialPage(t *testing.T) {
 			t.Fatalf("agent %s = %q, want %q", field, got[field], wantValue)
 		}
 	}
-	// 千分比格子的三档配色加无数据灰。
-	if got := strings.Join(claude.BarCells, ","); got != "ok,warn,down,none" {
+	// 千分比格子的三档配色加无数据灰，悬停文案带北京时间与可用率。
+	cellClasses := make([]string, 0, len(claude.BarCells))
+	for _, cell := range claude.BarCells {
+		cellClasses = append(cellClasses, cell.Class)
+	}
+	if got := strings.Join(cellClasses, ","); got != "ok,warn,down,none" {
 		t.Fatalf("agent bar cells = %q", got)
+	}
+	if claude.BarCells[0].Title != "13:00–13:30 北京时间 · 可用率 100%" {
+		t.Fatalf("cell title = %q", claude.BarCells[0].Title)
+	}
+	if claude.BarCells[1].Title != "13:30–14:00 北京时间 · 可用率 98.0%" {
+		t.Fatalf("cell title = %q", claude.BarCells[1].Title)
+	}
+	if !strings.Contains(claude.BarTitle, "正常 2，不稳定 1，异常 1") {
+		t.Fatalf("bar title = %q", claude.BarTitle)
 	}
 	if !strings.Contains(claude.ReasonNote, "上游限流 98%") || !strings.Contains(claude.ReasonNote, "上游繁忙 <1%") {
 		t.Fatalf("reason note = %q", claude.ReasonNote)
@@ -168,7 +183,11 @@ func TestStatusViewOrdersCohortsLikeTheOfficialPage(t *testing.T) {
 	if row.Model != "opus 5.5" || row.StateClass != "down" || row.StateLabel != statusLabelDown {
 		t.Fatalf("model row = %+v", row)
 	}
-	if got := strings.Join(row.BarCells, ","); got != "down,warn,ok,none" {
+	rowClasses := make([]string, 0, len(row.BarCells))
+	for _, cell := range row.BarCells {
+		rowClasses = append(rowClasses, cell.Class)
+	}
+	if got := strings.Join(rowClasses, ","); got != "down,warn,ok,none" {
 		t.Fatalf("model bar cells = %q", got)
 	}
 
@@ -197,7 +216,7 @@ func TestStatusViewKeepsOnlyTheProblemOnFetchFailure(t *testing.T) {
 		{resp: pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte("{not json")}},
 	} {
 		resetStatusCache(t)
-		view := statusViewFor(context.Background(), client)
+		view := statusViewFor(context.Background(), client, false)
 		if view.Problem != problemStatusFetch {
 			t.Fatalf("problem = %q, want the fetch failure text", view.Problem)
 		}
@@ -210,10 +229,10 @@ func TestStatusViewKeepsOnlyTheProblemOnFetchFailure(t *testing.T) {
 func TestStatusDocIsCachedForTheUpstreamMinute(t *testing.T) {
 	resetStatusCache(t)
 	client := fixtureStatusClient()
-	if _, err := fetchStatusDoc(context.Background(), client); err != nil {
+	if _, err := fetchStatusDoc(context.Background(), client, false); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
-	if _, err := fetchStatusDoc(context.Background(), client); err != nil {
+	if _, err := fetchStatusDoc(context.Background(), client, false); err != nil {
 		t.Fatalf("cached fetch: %v", err)
 	}
 	if client.calls != 1 {
@@ -222,11 +241,17 @@ func TestStatusDocIsCachedForTheUpstreamMinute(t *testing.T) {
 	statusCache.mu.Lock()
 	statusCache.at = time.Now().Add(-2 * statusCacheTTL)
 	statusCache.mu.Unlock()
-	if _, err := fetchStatusDoc(context.Background(), client); err != nil {
+	if _, err := fetchStatusDoc(context.Background(), client, false); err != nil {
 		t.Fatalf("stale fetch: %v", err)
 	}
 	if client.calls != 2 {
 		t.Fatalf("an expired cache must refetch, calls = %d", client.calls)
+	}
+	if _, err := fetchStatusDoc(context.Background(), client, true); err != nil {
+		t.Fatalf("bust fetch: %v", err)
+	}
+	if client.calls != 3 {
+		t.Fatalf("the refresh button must bypass a fresh cache, calls = %d", client.calls)
 	}
 }
 

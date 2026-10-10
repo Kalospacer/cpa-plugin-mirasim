@@ -111,7 +111,9 @@ func (p *Page) Serve(ctx context.Context, req pluginapi.ManagementRequest, host 
 	if client == nil {
 		return renderResponse(http.StatusServiceUnavailable, pageView{Problem: problemNoCallbacks})
 	}
-	return renderResponse(http.StatusOK, p.buildView(ctx, host, client))
+	// ?refresh=status 是面板「刷新数据」按钮的暗号：绕过状态接口的一分钟缓存，
+	// 让这一页拿到官方刚生成的数据。
+	return renderResponse(http.StatusOK, p.buildView(ctx, host, client, strings.EqualFold(req.Query.Get("refresh"), "status")))
 }
 
 // isMirasimAuth filters the host's credential list down to this plugin's own

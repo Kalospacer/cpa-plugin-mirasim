@@ -104,7 +104,7 @@ const (
 
 var weekdayNames = [7]string{"日", "一", "二", "三", "四", "五", "六"}
 
-func (p *Page) buildView(ctx context.Context, host HostServices, client pluginapi.HostHTTPClient) pageView {
+func (p *Page) buildView(ctx context.Context, host HostServices, client pluginapi.HostHTTPClient, bustStatus bool) pageView {
 	view := pageView{ReadAt: time.Now().UTC().Format("2006-01-02 15:04 MST")}
 	entries, errList := host.ListAuth(ctx)
 	if errList != nil {
@@ -128,7 +128,7 @@ func (p *Page) buildView(ctx context.Context, host HostServices, client pluginap
 	now := time.Now().UTC()
 	view.WeekGrid = buildGridView("week", lanes, now)
 	view.HourGrid = buildGridView("hour", lanes, now)
-	status := statusViewFor(ctx, client)
+	status := statusViewFor(ctx, client, bustStatus)
 	view.Status = &status
 	return view
 }
