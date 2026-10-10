@@ -25,6 +25,11 @@ button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #8b868
 @media(prefers-reduced-motion:reduce){button:active:not(:disabled){transform:none}}
 /* 模型可用性面板：镜像官方状态页（mirasim.ai/zh/status）的分组切换、智能体卡片与 24 小时可用条；沿用本页的变量与圆角。 */
 .model-status{display:flex;flex-direction:column;gap:10px;padding:15px 16px;border:1px solid var(--border-color);border-radius:14px;background:color-mix(in srgb,var(--bg-primary) 82%,transparent)}
+.model-status>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;user-select:none}
+.model-status>summary::-webkit-details-marker{display:none}
+.model-status>summary::before{content:'▸';font-size:11px;color:var(--text-tertiary);transition:transform .15s}
+.model-status[open]>summary::before{transform:rotate(90deg)}
+.model-status[open]>summary{margin-bottom:2px}
 .model-status h2{margin:0;font-size:18px;font-weight:650}.model-status h2 span{font-size:12px;font-weight:400;color:var(--text-tertiary);margin-left:6px}
 .status-help{margin:0;font-size:12px;line-height:1.5;color:var(--text-tertiary)}
 .status-help a{color:inherit;text-underline-offset:3px}

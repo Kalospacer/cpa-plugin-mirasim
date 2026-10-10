@@ -3,8 +3,8 @@
 <div class="toast" id="toast">已刷新额度 / Quota refreshed</div>
 <header class="head-row"><div class="head-copy"><h1>配额管理</h1><p class="meta"><span>{{.TotalCount}} 个凭证</span><span class="meta-dot">·</span><span class="meta-loaded">{{.LoadedCount}} 个已加载</span></p></div><div><button class="btn btn-primary" type="button" data-refresh><svg class="refresh-icon" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5"/><path d="M20 4v7h-7"/></svg>刷新全部凭证</button></div></header>
 {{if .Problem}}<p class="problem">{{.Problem}}</p>{{end}}{{if .Empty}}<p class="empty-state">{{emptyAccounts}}</p>{{end}}
-{{if .Status}}<section class="model-status" id="model-status">
-<h2>模型可用性 <span>Model availability</span></h2>
+{{if .Status}}<details class="model-status" id="model-status" open>
+<summary><h2>模型可用性 <span>Model availability</span></h2></summary>
 <p class="status-help">数据来自 <a href="https://mirasim.ai/zh/status" target="_blank" rel="noreferrer noopener">Mirasim 官方状态页</a>，按真实调用统计、每分钟更新。不再发送测试请求，不消耗账户额度。</p>
 {{if .Status.Problem}}<p class="problem">{{.Status.Problem}}</p>{{else}}
 <div class="status-tabs">{{range $i,$c := .Status.Cohorts}}<button type="button" data-cohort="{{$c.ID}}" aria-pressed="{{if $i}}false{{else}}true{{end}}">{{$c.Title}}</button>{{end}}</div>
@@ -17,7 +17,7 @@
 </div>{{end}}</div>{{else}}<p class="empty-state">{{emptyStatus}}</p>{{end}}
 {{range .Status.Notes}}<p class="status-note">{{.}}</p>{{end}}<p class="status-foot">数据生成于 {{.Status.GeneratedAt}} UTC · 刷新页面重新读取</p>
 {{end}}
-</section>{{end}}
+</details>{{end}}
 <nav class="tabs"><span class="tab">MIRASIM <span class="count">{{.TotalCount}}</span></span></nav>
 <div class="cards">{{range .Accounts}}<section class="card">
 <div class="card-head"><span class="avatar">M</span><span class="card-name" title="{{if .Name}}{{.Name}}{{else}}{{.Email}}{{end}}">{{if .Name}}{{.Name}}{{else if .Email}}{{.Email}}{{else}}账户 {{.Number}}{{end}}</span></div>

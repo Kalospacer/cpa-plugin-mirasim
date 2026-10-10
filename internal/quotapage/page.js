@@ -124,6 +124,14 @@
     document.querySelectorAll('time[data-plan-exp]').forEach(t => { const at = Date.parse(t.dateTime); if (Number.isFinite(at)) t.textContent = dateText(at) + ' ' + timeText(at); });
     if (boxes.length) renderTimelines(now);
   }
+  // 模型可用性整块的折叠状态跨刷新保持：默认展开，收过一次就一直收着。
+  const statusPanel = document.getElementById('model-status');
+  if (statusPanel) {
+    try { statusPanel.open = sessionStorage.getItem('mq-status-open') !== '0'; } catch {}
+    statusPanel.addEventListener('toggle', () => {
+      try { sessionStorage.setItem('mq-status-open', statusPanel.open ? '1' : '0'); } catch {}
+    });
+  }
   // 模型可用性的三组服务切换，与「按周 / 5小时」同一套 pills 交互。
   const cohortTabs = [...document.querySelectorAll('[data-cohort]')];
   const cohortPanels = [...document.querySelectorAll('[data-cohort-panel]')];
