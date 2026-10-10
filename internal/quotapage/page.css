@@ -23,27 +23,44 @@ button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #8b868
 .legend{display:flex;align-items:center;flex-wrap:wrap;gap:16px;font-size:11px;color:var(--text-quaternary)}.legend-item{display:inline-flex;align-items:center;gap:6px}.swatch{width:22px;height:10px;border-radius:999px}.lg-on{background:color-mix(in srgb,#888 34%,transparent);border:1px solid color-mix(in srgb,#888 50%,transparent)}.lg-soon{border:1px dashed color-mix(in srgb,#888 45%,transparent)}.lg-past{background:color-mix(in srgb,#888 12%,transparent)}.lg-credit{width:2px;height:14px;background:var(--amber-color)}.legend-note{flex:1 1 320px}.foot{font-size:11px;color:var(--text-quaternary);margin:0}.toast{position:fixed;right:18px;top:18px;padding:10px 16px;border:1px solid var(--border-color);border-radius:10px;background:#fff;display:none;z-index:9}.toast.show{display:block}.fallback{overflow:auto;font-size:11px}.fallback table{border-collapse:collapse}.fallback td,.fallback th{padding:4px}
 @media(max-width:768px){body{padding:12px}.chart{overflow-x:auto}.axis,.timeline-lane{min-width:720px}.limit-head{flex-direction:column;align-items:flex-start}.limit-name{white-space:normal}.head-row{align-items:flex-start}}
 @media(prefers-reduced-motion:reduce){button:active:not(:disabled){transform:none}}
-/* 模型可用性面板：数据来自 Mirasim 官方状态页；沿用本页的变量与圆角，只有面板自己的元素在此定义。 */
+/* 模型可用性面板：镜像官方状态页（mirasim.ai/zh/status）的分组切换、智能体卡片与 24 小时可用条；沿用本页的变量与圆角。 */
 .model-status{display:flex;flex-direction:column;gap:10px;padding:15px 16px;border:1px solid var(--border-color);border-radius:14px;background:color-mix(in srgb,var(--bg-primary) 82%,transparent)}
 .model-status h2{margin:0;font-size:18px;font-weight:650}.model-status h2 span{font-size:12px;font-weight:400;color:var(--text-tertiary);margin-left:6px}
 .status-help{margin:0;font-size:12px;line-height:1.5;color:var(--text-tertiary)}
 .status-help a{color:inherit;text-underline-offset:3px}
-.status-cohort{display:flex;flex-direction:column;gap:4px}
-.status-cohort h3{margin:6px 0 2px;font-size:13px;font-weight:650}
-.status-cohort h3 span{font-size:11px;font-weight:400;color:var(--text-tertiary);margin-left:8px}
+.status-tabs{display:inline-flex;align-self:flex-start;align-items:center;gap:2px;padding:3px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:999px}
+.status-tabs button{padding:4px 12px;font:inherit;font-size:12.5px;color:var(--text-secondary);background:transparent;border:1px solid transparent;border-radius:999px}
+.status-tabs button[aria-pressed=true]{background:var(--bg-primary);border-color:var(--border-hover);color:var(--text-primary)}
+.status-cohort{display:flex;flex-direction:column;gap:10px}
+.status-desc{margin:0;font-size:11px;color:var(--text-quaternary)}
+.ms-card{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--border-color);border-radius:12px;background:var(--bg-primary)}
+.ms-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ms-agent-name{font-size:13px;font-weight:650}
+.ms-badge{display:inline-block;white-space:nowrap;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;background:var(--bg-tertiary);color:var(--text-secondary)}
+.ms-badge.is-ok{background:color-mix(in srgb,var(--viz-success) 16%,transparent);color:#0f7a53}
+.ms-badge.is-warn{background:color-mix(in srgb,var(--quota-medium-color) 18%,transparent);color:#8a6207}
+.ms-badge.is-down{background:color-mix(in srgb,var(--viz-failure) 14%,transparent);color:var(--viz-failure)}
+.ms-badge.is-none{background:var(--bg-tertiary);color:var(--text-quaternary)}
+.ms-metrics{display:flex;gap:18px 24px;flex-wrap:wrap}
+.ms-metric{display:flex;flex-direction:column;gap:1px;min-width:0}
+.ms-mnum{font:600 15px var(--font-mono);font-variant-numeric:tabular-nums}
+.ms-mlabel{font-size:10.5px;color:var(--text-quaternary);white-space:nowrap}
+.ms-bar{display:flex;gap:1px;height:18px}
+.ms-bar i{flex:1 1 0;min-width:0;border-radius:2px}
+.ms-bar.msb{height:12px;min-width:150px}
+.ms-bar .is-ok{background:var(--viz-success)}
+.ms-bar .is-warn{background:var(--quota-medium-color)}
+.ms-bar .is-down{background:var(--viz-failure)}
+.ms-bar .is-none{background:color-mix(in srgb,var(--text-primary) 10%,transparent)}
+.ms-bar-axis{display:flex;justify-content:space-between;font-size:10px;color:var(--text-quaternary);font-variant-numeric:tabular-nums}
+.ms-note{margin:0;font-size:11px;color:var(--text-quaternary)}
 .model-status .table-scroll{overflow-x:auto}
 .model-status table{width:100%;border-collapse:collapse;font-size:12px}
 .model-status th,.model-status td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border-color);vertical-align:middle}
 .model-status th{font:700 10px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-tertiary);white-space:nowrap}
 .model-status td:first-child{white-space:nowrap}
-.ms-agent{display:inline-block;margin-right:7px;padding:1px 6px;border-radius:4px;font-size:10.5px;font-weight:600;color:var(--text-secondary);background:var(--bg-tertiary)}
 .model-name{font:600 12px var(--font-mono);overflow-wrap:anywhere}
 .ms-num{font:11.5px var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--text-secondary)}
-.ms-badge{display:inline-block;white-space:nowrap;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;background:var(--bg-tertiary);color:var(--text-secondary)}
-.ms-badge.is-ok{background:color-mix(in srgb,var(--viz-success) 16%,transparent);color:#0f7a53}
-.ms-badge.is-degraded{background:color-mix(in srgb,var(--quota-medium-color) 18%,transparent);color:#8a6207}
-.ms-badge.is-down{background:color-mix(in srgb,var(--viz-failure) 14%,transparent);color:var(--viz-failure)}
-.ms-badge.is-none{background:var(--bg-tertiary);color:var(--text-quaternary)}
 .status-note{margin:2px 0 0;font-size:11px;color:var(--text-quaternary)}
 .status-foot{margin:2px 0 0;font-size:11px;color:var(--text-quaternary)}
-@media(max-width:768px){.model-status table{min-width:720px}}
+@media(max-width:768px){.model-status table{min-width:820px}.ms-metrics{gap:12px 18px}}

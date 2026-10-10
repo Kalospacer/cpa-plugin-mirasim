@@ -37,6 +37,9 @@ const (
 	statusLabelPending    = "尚未开始统计"
 	statusLabelUnreadable = "暂时读不到"
 	statusLabelNone       = "数据中断"
+	agentLabelOK          = "运行正常"
+	agentLabelDegraded    = "部分模型不稳定"
+	agentLabelDown        = "部分模型异常"
 )
 
 // HTML/CSS/JS 编译进插件，部署仍为单一插件文件，不请求外部资源。

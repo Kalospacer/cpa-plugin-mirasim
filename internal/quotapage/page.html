@@ -5,15 +5,17 @@
 {{if .Problem}}<p class="problem">{{.Problem}}</p>{{end}}{{if .Empty}}<p class="empty-state">{{emptyAccounts}}</p>{{end}}
 {{if .Status}}<section class="model-status" id="model-status">
 <h2>模型可用性 <span>Model availability</span></h2>
-<p class="status-help">数据来自 <a href="https://mirasim.ai/zh/status" target="_blank" rel="noreferrer noopener">Mirasim 官方状态页</a>，按真实调用统计、每分钟更新；「当前」为接口最近窗口（约 15 分钟）的可用率，「一致率」为回答与所选模型、配置一致的比例。不再发送测试请求，不消耗账户额度。</p>
+<p class="status-help">数据来自 <a href="https://mirasim.ai/zh/status" target="_blank" rel="noreferrer noopener">Mirasim 官方状态页</a>，按真实调用统计、每分钟更新。不再发送测试请求，不消耗账户额度。</p>
 {{if .Status.Problem}}<p class="problem">{{.Status.Problem}}</p>{{else}}
-{{range .Status.Cohorts}}<div class="status-cohort"><h3>{{.Title}}{{if .Desc}}<span>{{.Desc}}</span>{{end}}</h3>
-<div class="table-scroll"><table><thead><tr><th>模型</th><th>状态</th><th>当前</th><th>24 小时</th><th>7 天</th><th>首字 p50</th><th>一致率</th></tr></thead><tbody>
-{{range .Rows}}<tr><td><span class="ms-agent">{{.Agent}}</span><span class="model-name">{{.Model}}</span></td><td><span class="ms-badge is-{{.StateClass}}">{{.StateLabel}}</span></td><td class="ms-num">{{.Now}}</td><td class="ms-num">{{.H24}}</td><td class="ms-num">{{.D7}}</td><td class="ms-num">{{.P50}}</td><td class="ms-num">{{.SameModel}}</td></tr>{{end}}
-</tbody></table></div>
-{{range .Notes}}<p class="status-note">{{.}}</p>{{end}}
-</div>{{else}}<p class="empty-state">{{emptyStatus}}</p>{{end}}
-<p class="status-foot">数据生成于 {{.Status.GeneratedAt}} UTC · 刷新页面重新读取</p>
+<div class="status-tabs">{{range $i,$c := .Status.Cohorts}}<button type="button" data-cohort="{{$c.ID}}" aria-pressed="{{if $i}}false{{else}}true{{end}}">{{$c.Title}}</button>{{end}}</div>
+{{range $i,$c := .Status.Cohorts}}<div class="status-cohort" data-cohort-panel="{{$c.ID}}"{{if $i}} style="display:none"{{end}}>{{if $c.Desc}}<p class="status-desc">{{$c.Desc}}</p>{{end}}{{if $c.StateNote}}<p class="status-note">{{$c.StateNote}}</p>{{end}}{{range $c.Agents}}<div class="ms-card">
+<div class="ms-card-head"><span class="ms-agent-name">{{.Name}}</span><span class="ms-badge is-{{.StateClass}}">{{.StateLabel}}</span></div>
+<div class="ms-metrics"><div class="ms-metric"><span class="ms-mnum">{{.Now}}</span><span class="ms-mlabel">当前可用率{{if .NowWindow}} · {{.NowWindow}}{{end}}</span></div><div class="ms-metric"><span class="ms-mnum">{{.H24}}</span><span class="ms-mlabel">24 小时可用率</span></div><div class="ms-metric"><span class="ms-mnum">{{.D7}}</span><span class="ms-mlabel">7 天可用率</span></div><div class="ms-metric"><span class="ms-mnum">{{.P50}}</span><span class="ms-mlabel">首字延迟 p50{{if .P95}} · p95 {{.P95}}{{end}}</span></div><div class="ms-metric"><span class="ms-mnum">{{.Same}}</span><span class="ms-mlabel">模型与配置一致率 · 近 24 小时</span></div></div>
+{{if .BarCells}}<div class="ms-bar" title="最近 24 小时">{{range .BarCells}}<i class="is-{{.}}"></i>{{end}}</div><div class="ms-bar-axis"><span>24 小时前</span><span>{{.BarUptime}}</span><span>现在</span></div>{{end}}
+{{if .ReasonNote}}<p class="ms-note">{{.ReasonNote}}</p>{{end}}{{if .IntelNote}}<p class="ms-note">{{.IntelNote}}</p>{{end}}
+{{if .Models}}<div class="table-scroll"><table><thead><tr><th>模型</th><th>状态</th><th>当前</th><th>24 小时</th><th>7 天</th><th>首字 p50</th><th>模型与配置一致率</th><th>最近 24 小时</th></tr></thead><tbody>{{range .Models}}<tr><td><span class="model-name">{{.Model}}</span></td><td><span class="ms-badge is-{{.StateClass}}">{{.StateLabel}}</span></td><td class="ms-num">{{.Now}}</td><td class="ms-num">{{.H24}}</td><td class="ms-num">{{.D7}}</td><td class="ms-num">{{.P50}}</td><td class="ms-num">{{.SameModel}}</td><td>{{if .BarCells}}<div class="ms-bar msb">{{range .BarCells}}<i class="is-{{.}}"></i>{{end}}</div>{{else}}—{{end}}</td></tr>{{end}}</tbody></table></div>{{end}}
+</div>{{end}}</div>{{else}}<p class="empty-state">{{emptyStatus}}</p>{{end}}
+{{range .Status.Notes}}<p class="status-note">{{.}}</p>{{end}}<p class="status-foot">数据生成于 {{.Status.GeneratedAt}} UTC · 刷新页面重新读取</p>
 {{end}}
 </section>{{end}}
 <nav class="tabs"><span class="tab">MIRASIM <span class="count">{{.TotalCount}}</span></span></nav>

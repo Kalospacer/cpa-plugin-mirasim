@@ -16,20 +16,31 @@ import (
 // https://mirasim.ai/zh/status renders from GET /api/status, which publishes
 // per-model availability computed from real calls and refreshed every minute.
 // Reading it costs no account quota, so the page no longer sends a probe
-// request per model the way the retired one-click test did.
+// request per model the way the retired one-click test did. The panel layout
+// mirrors the official page: cohort tabs, then one card per agent carrying
+// summary metrics, a 48-cell 24-hour availability bar and its model table.
 
 const (
 	statusURL          = "https://mirasim.ai/api/status"
 	statusCacheTTL     = time.Minute
 	statusFetchTimeout = 8 * time.Second
+	statusCellCount    = 48
 )
 
 // The document mirrors schema 2 of /api/status; fields the panel does not
 // show are simply not declared here. Nullable numbers stay pointers so a
 // model the API cannot measure yet renders "—" rather than a fake zero.
+// cells values are per-mille availability (0–1000), -1 meaning no data.
 type statusDoc struct {
-	GeneratedAt string         `json:"generatedAt"`
-	Cohorts     []statusCohort `json:"cohorts"`
+	GeneratedAt string           `json:"generatedAt"`
+	Thresholds  statusThresholds `json:"thresholds"`
+	Cohorts     []statusCohort   `json:"cohorts"`
+	Notes       []string         `json:"notes"`
+}
+
+type statusThresholds struct {
+	Good *float64 `json:"good"`
+	Warn *float64 `json:"warn"`
 }
 
 type statusCohort struct {
@@ -47,12 +58,34 @@ type statusAgent struct {
 }
 
 type statusSummary struct {
-	Now statusNow `json:"now"`
+	Now          statusNow     `json:"now"`
+	Availability statusWindows `json:"availability"`
+	Latency      statusLatency `json:"latency"`
+	SameModel    *float64      `json:"sameModel"`
+	Intel        statusIntel   `json:"intel"`
+	Cells        []int         `json:"cells"`
 }
 
 type statusNow struct {
 	Status       string   `json:"status"`
 	Availability *float64 `json:"availability"`
+	Window       string   `json:"window"`
+}
+
+type statusWindows struct {
+	H24 *float64 `json:"h24"`
+	D7  *float64 `json:"d7"`
+}
+
+type statusLatency struct {
+	P50 *float64 `json:"p50"`
+	P95 *float64 `json:"p95"`
+}
+
+type statusIntel struct {
+	Swapped    *float64 `json:"swapped"`
+	Mismatched *float64 `json:"mismatched"`
+	Cut        *float64 `json:"cut"`
 }
 
 type statusReason struct {
@@ -61,37 +94,51 @@ type statusReason struct {
 }
 
 type statusModel struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Now          statusNow `json:"now"`
-	Availability struct {
-		H24 *float64 `json:"h24"`
-		D7  *float64 `json:"d7"`
-	} `json:"availability"`
-	Latency struct {
-		P50 *float64 `json:"p50"`
-	} `json:"latency"`
-	SameModel *float64 `json:"sameModel"`
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	Now          statusNow     `json:"now"`
+	Availability statusWindows `json:"availability"`
+	Latency      statusLatency `json:"latency"`
+	SameModel    *float64      `json:"sameModel"`
+	Cells        []int         `json:"cells"`
 }
 
-// statusView is the panel's template model: one block per service cohort,
-// each holding a flat model table plus a note line for agents that reported
-// failure reasons.
+// statusView is the panel's template model: a tab bar of service cohorts and
+// one card per agent inside each cohort.
 type statusView struct {
 	Problem     string
 	GeneratedAt string
+	Notes       []string
 	Cohorts     []statusCohortView
 }
 
 type statusCohortView struct {
-	Title string
-	Desc  string
-	Rows  []statusRowView
-	Notes []string
+	ID        string
+	Title     string
+	Desc      string
+	StateNote string
+	Agents    []statusAgentView
+}
+
+type statusAgentView struct {
+	Name       string
+	StateClass string
+	StateLabel string
+	Now        string
+	NowWindow  string
+	H24        string
+	D7         string
+	P50        string
+	P95        string
+	Same       string
+	BarCells   []string
+	BarUptime  string
+	ReasonNote string
+	IntelNote  string
+	Models     []statusRowView
 }
 
 type statusRowView struct {
-	Agent      string
 	Model      string
 	StateClass string
 	StateLabel string
@@ -100,6 +147,7 @@ type statusRowView struct {
 	D7         string
 	P50        string
 	SameModel  string
+	BarCells   []string
 }
 
 // statusCohortMeta fixes the display order and wording the official page
@@ -168,7 +216,7 @@ func statusViewFor(ctx context.Context, client pluginapi.HostHTTPClient) statusV
 	if err != nil {
 		return statusView{Problem: problemStatusFetch}
 	}
-	view := statusView{GeneratedAt: statusGeneratedAt(doc.GeneratedAt)}
+	view := statusView{GeneratedAt: statusGeneratedAt(doc.GeneratedAt), Notes: doc.Notes}
 	byID := make(map[string]statusCohort, len(doc.Cohorts))
 	for _, cohort := range doc.Cohorts {
 		byID[cohort.ID] = cohort
@@ -180,78 +228,113 @@ func statusViewFor(ctx context.Context, client pluginapi.HostHTTPClient) statusV
 			continue
 		}
 		seen[meta.ID] = true
-		view.Cohorts = append(view.Cohorts, cohortViewFor(cohort, meta.Title, meta.Desc))
+		view.Cohorts = append(view.Cohorts, cohortViewFor(cohort, meta, doc.Thresholds))
 	}
 	for _, cohort := range doc.Cohorts {
 		if !seen[cohort.ID] {
-			view.Cohorts = append(view.Cohorts, cohortViewFor(cohort, cohort.ID, ""))
+			view.Cohorts = append(view.Cohorts, cohortViewFor(cohort, struct {
+				ID    string
+				Title string
+				Desc  string
+			}{ID: cohort.ID, Title: cohort.ID}, doc.Thresholds))
 		}
 	}
 	return view
 }
 
-func cohortViewFor(cohort statusCohort, title, desc string) statusCohortView {
-	view := statusCohortView{Title: title, Desc: desc}
+func cohortViewFor(cohort statusCohort, meta struct {
+	ID    string
+	Title string
+	Desc  string
+}, thresholds statusThresholds) statusCohortView {
+	view := statusCohortView{ID: meta.ID, Title: meta.Title, Desc: meta.Desc}
 	// A cohort counting nothing yet still gets its block, with the state the
 	// API reported instead of an empty table.
 	if state := strings.ToLower(strings.TrimSpace(cohort.State)); state != "" && state != "ok" {
 		_, label := statusBadge(state)
-		view.Notes = append(view.Notes, "此分组"+label+"。")
+		view.StateNote = "此分组" + label + "。"
 	}
 	for _, agent := range cohort.Agents {
-		name := strings.TrimSpace(agent.Name)
-		if name == "" {
-			name = agent.ID
-		}
-		if len(agent.Models) == 0 {
-			class, label := statusBadge(agent.Summary.Now.Status)
-			view.Rows = append(view.Rows, statusRowView{
-				Agent: name, Model: "—", StateClass: class, StateLabel: label,
-				Now: statusPercent(agent.Summary.Now.Availability),
-				H24: "—", D7: "—", P50: "—", SameModel: "—",
-			})
-		}
-		for _, model := range agent.Models {
-			class, label := statusBadge(model.Now.Status)
-			modelName := strings.TrimSpace(model.Name)
-			if modelName == "" {
-				modelName = model.ID
-			}
-			view.Rows = append(view.Rows, statusRowView{
-				Agent: name, Model: modelName, StateClass: class, StateLabel: label,
-				Now:       statusPercent(model.Now.Availability),
-				H24:       statusPercent(model.Availability.H24),
-				D7:        statusPercent(model.Availability.D7),
-				P50:       statusLatency(model.Latency.P50),
-				SameModel: statusPercent(model.SameModel),
-			})
-		}
-		// 官方页面会给非正常的智能体标出近 1 小时失败原因，保留在分组下方；
-		// 占比不到 1% 的噪声项不列。
-		if class, _ := statusBadge(agent.Summary.Now.Status); class != "ok" && len(agent.Reasons) > 0 {
-			parts := make([]string, 0, len(agent.Reasons))
-			for _, reason := range agent.Reasons {
-				if reason.Share >= 1 {
-					parts = append(parts, fmt.Sprintf("%s %.0f%%", statusReasonLabel(reason.Class), reason.Share))
-				}
-			}
-			if len(parts) > 0 {
-				view.Notes = append(view.Notes, name+"：近 1 小时失败原因 — "+strings.Join(parts, "、"))
-			}
-		}
+		view.Agents = append(view.Agents, agentViewFor(agent, thresholds))
 	}
 	return view
 }
 
-// statusBadge maps the status page's per-model state to the panel's badge.
-// Values the API may add later render as neutral grey rather than a wrong
-// colour.
+func agentViewFor(agent statusAgent, thresholds statusThresholds) statusAgentView {
+	name := strings.TrimSpace(agent.Name)
+	if name == "" {
+		name = agent.ID
+	}
+	summary := agent.Summary
+	class, label := agentBadge(summary.Now.Status)
+	view := statusAgentView{
+		Name: name, StateClass: class, StateLabel: label,
+		Now:       statusPercent(summary.Now.Availability),
+		NowWindow: statusWindowLabel(summary.Now.Window),
+		H24:       statusPercent(summary.Availability.H24),
+		D7:        statusPercent(summary.Availability.D7),
+		P50:       statusLatencyText(summary.Latency.P50),
+		P95:       statusLatencyText(summary.Latency.P95),
+		Same:      statusPercent(summary.SameModel),
+		BarCells:  statusCellClasses(summary.Cells, thresholds),
+	}
+	// 汇总条中央的标注就是官方页面显示的 24 小时可用率。
+	if summary.Availability.H24 != nil {
+		view.BarUptime = fmt.Sprintf("%.1f%% 可用", *summary.Availability.H24)
+	}
+	// 官方页面会给非正常的智能体标出近 1 小时失败原因。
+	if class != "ok" && len(agent.Reasons) > 0 {
+		parts := make([]string, 0, len(agent.Reasons))
+		for _, reason := range agent.Reasons {
+			parts = append(parts, statusReasonLabel(reason.Class)+" "+statusShare(reason.Share))
+		}
+		view.ReasonNote = "近 1 小时失败原因：" + strings.Join(parts, " · ")
+	}
+	// 近 24 小时与所选模型不一致的调用占比，官方以「模型或配置变化」列出。
+	intelParts := make([]string, 0, 3)
+	for _, pair := range []struct {
+		label string
+		share *float64
+	}{
+		{"模型切换", summary.Intel.Swapped},
+		{"型号不符", summary.Intel.Mismatched},
+		{"能力降级", summary.Intel.Cut},
+	} {
+		if pair.share != nil && *pair.share > 0 {
+			intelParts = append(intelParts, pair.label+" "+statusShare(*pair.share))
+		}
+	}
+	if len(intelParts) > 0 {
+		view.IntelNote = "模型或配置变化（近 24 小时）：" + strings.Join(intelParts, " · ")
+	}
+	for _, model := range agent.Models {
+		modelName := strings.TrimSpace(model.Name)
+		if modelName == "" {
+			modelName = model.ID
+		}
+		modelClass, modelLabel := statusBadge(model.Now.Status)
+		view.Models = append(view.Models, statusRowView{
+			Model: modelName, StateClass: modelClass, StateLabel: modelLabel,
+			Now:       statusPercent(model.Now.Availability),
+			H24:       statusPercent(model.Availability.H24),
+			D7:        statusPercent(model.Availability.D7),
+			P50:       statusLatencyText(model.Latency.P50),
+			SameModel: statusPercent(model.SameModel),
+			BarCells:  statusCellClasses(model.Cells, thresholds),
+		})
+	}
+	return view
+}
+
+// statusBadge maps a model-level state to the badge classes and wording the
+// official page uses. Values the API may add later render as neutral grey
+// rather than a wrong colour.
 func statusBadge(status string) (class, label string) {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "ok":
 		return "ok", statusLabelOK
 	case "degraded":
-		return "degraded", statusLabelDegraded
+		return "warn", statusLabelDegraded
 	case "down":
 		return "down", statusLabelDown
 	case "sparse":
@@ -263,6 +346,51 @@ func statusBadge(status string) (class, label string) {
 	default:
 		return "none", statusLabelNone
 	}
+}
+
+// agentBadge is the same mapping with the official agent-level wording
+// (部分模型… / 运行正常 instead of 异常/正常).
+func agentBadge(status string) (class, label string) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ok":
+		return "ok", agentLabelOK
+	case "degraded":
+		return "warn", agentLabelDegraded
+	case "down":
+		return "down", agentLabelDown
+	default:
+		return statusBadge(status)
+	}
+}
+
+// statusCellClasses maps one 24-hour cell row to the official bar's colour
+// classes: per-mille availability ≥ good·10 is ok, ≥ warn·10 is warn, lower
+// is down, and negative values mark cells with no data.
+func statusCellClasses(cells []int, thresholds statusThresholds) []string {
+	if len(cells) == 0 {
+		return nil
+	}
+	good, warn := 990, 950
+	if thresholds.Good != nil {
+		good = int(*thresholds.Good * 10)
+	}
+	if thresholds.Warn != nil {
+		warn = int(*thresholds.Warn * 10)
+	}
+	classes := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		switch {
+		case cell < 0:
+			classes = append(classes, "none")
+		case cell >= good:
+			classes = append(classes, "ok")
+		case cell >= warn:
+			classes = append(classes, "warn")
+		default:
+			classes = append(classes, "down")
+		}
+	}
+	return classes
 }
 
 // statusReasonLabel maps the status page's failure classes to its own zh
@@ -282,6 +410,31 @@ func statusReasonLabel(class string) string {
 	}
 }
 
+// statusWindowLabel renders the API's window strings the way the official
+// page captions them.
+func statusWindowLabel(window string) string {
+	switch strings.ToLower(strings.TrimSpace(window)) {
+	case "15m":
+		return "近 15 分钟"
+	case "1h":
+		return "近 1 小时"
+	default:
+		if trimmed := strings.TrimSpace(window); trimmed != "" {
+			return "近 " + trimmed
+		}
+		return ""
+	}
+}
+
+// statusShare renders a failure/change share the official way: whole
+// percentages, and "<1%" for sub-percent noise instead of "0%".
+func statusShare(share float64) string {
+	if share > 0 && share < 1 {
+		return "<1%"
+	}
+	return fmt.Sprintf("%.0f%%", share)
+}
+
 func statusPercent(value *float64) string {
 	if value == nil {
 		return "—"
@@ -289,8 +442,8 @@ func statusPercent(value *float64) string {
 	return fmt.Sprintf("%.1f%%", *value)
 }
 
-// statusLatency renders the first-token p50 the API reports, in seconds.
-func statusLatency(value *float64) string {
+// statusLatencyText renders the first-token latency the API reports, in seconds.
+func statusLatencyText(value *float64) string {
 	if value == nil {
 		return "—"
 	}

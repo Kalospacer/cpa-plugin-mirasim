@@ -124,6 +124,14 @@
     document.querySelectorAll('time[data-plan-exp]').forEach(t => { const at = Date.parse(t.dateTime); if (Number.isFinite(at)) t.textContent = dateText(at) + ' ' + timeText(at); });
     if (boxes.length) renderTimelines(now);
   }
+  // 模型可用性的三组服务切换，与「按周 / 5小时」同一套 pills 交互。
+  const cohortTabs = [...document.querySelectorAll('[data-cohort]')];
+  const cohortPanels = [...document.querySelectorAll('[data-cohort-panel]')];
+  const pickCohort = id => {
+    cohortTabs.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cohort === id)));
+    cohortPanels.forEach(p => { p.style.display = p.dataset.cohortPanel === id ? '' : 'none'; });
+  };
+  cohortTabs.forEach(b => b.addEventListener('click', () => pickCohort(b.dataset.cohort)));
   document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { mode = b.dataset.view; offset = 0; tick(); }));
   document.querySelectorAll('[data-nav]').forEach(b => b.addEventListener('click', () => { offset = b.dataset.nav === 'today' ? 0 : offset + (b.dataset.nav === 'prev' ? -1 : 1); tick(); }));
   document.querySelectorAll('[data-refresh]').forEach(b => b.addEventListener('click', () => { b.disabled = true; try { sessionStorage.setItem('mq-refreshed', '1'); } catch {} location.reload(); }));
