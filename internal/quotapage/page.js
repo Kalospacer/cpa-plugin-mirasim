@@ -110,7 +110,13 @@
     }
     document.querySelectorAll('[data-range]').forEach(el => { el.style.display = el.dataset.range === mode ? '' : 'none'; });
     document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === mode)));
-    document.querySelector('[data-nav="today"]')?.toggleAttribute('disabled', offset === 0);
+    const todayButton = document.querySelector('[data-nav="today"]');
+    if (todayButton) {
+      todayButton.toggleAttribute('disabled', offset === 0);
+      // 与 CPA 一致：离开当前时间段后中间按钮显示所看区间的起始日期，点它回到今天。
+      todayButton.textContent = offset === 0 ? '今天' : dateText(spanFor(mode, now).start);
+      todayButton.title = offset === 0 ? '' : '今天';
+    }
   }
   function tick() {
     const now = Date.now();

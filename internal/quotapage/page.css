@@ -23,26 +23,27 @@ button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #8b868
 .legend{display:flex;align-items:center;flex-wrap:wrap;gap:16px;font-size:11px;color:var(--text-quaternary)}.legend-item{display:inline-flex;align-items:center;gap:6px}.swatch{width:22px;height:10px;border-radius:999px}.lg-on{background:color-mix(in srgb,#888 34%,transparent);border:1px solid color-mix(in srgb,#888 50%,transparent)}.lg-soon{border:1px dashed color-mix(in srgb,#888 45%,transparent)}.lg-past{background:color-mix(in srgb,#888 12%,transparent)}.lg-credit{width:2px;height:14px;background:var(--amber-color)}.legend-note{flex:1 1 320px}.foot{font-size:11px;color:var(--text-quaternary);margin:0}.toast{position:fixed;right:18px;top:18px;padding:10px 16px;border:1px solid var(--border-color);border-radius:10px;background:#fff;display:none;z-index:9}.toast.show{display:block}.fallback{overflow:auto;font-size:11px}.fallback table{border-collapse:collapse}.fallback td,.fallback th{padding:4px}
 @media(max-width:768px){body{padding:12px}.chart{overflow-x:auto}.axis,.timeline-lane{min-width:720px}.limit-head{flex-direction:column;align-items:flex-start}.limit-name{white-space:normal}.head-row{align-items:flex-start}}
 @media(prefers-reduced-motion:reduce){button:active:not(:disabled){transform:none}}
-/* 模型可用性测试面板：沿用本页的变量与圆角，只有面板自己的元素在此定义。 */
-.model-tests{display:flex;flex-direction:column;gap:10px;padding:15px 16px;border:1px solid var(--border-color);border-radius:14px;background:color-mix(in srgb,var(--bg-primary) 82%,transparent)}
-.model-tests h2{margin:0;font-size:18px;font-weight:650}.model-tests h2 span{font-size:12px;font-weight:400;color:var(--text-tertiary);margin-left:6px}
-.model-tests .test-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.model-tests .table-scroll{overflow-x:auto}
-.model-tests table{width:100%;border-collapse:collapse;font-size:12px}
-.model-tests th,.model-tests td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border-color);vertical-align:top}
-.model-tests th{font:700 10px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-tertiary)}
-.model-tests td:first-child{white-space:nowrap}
-.model-tests [hidden]{display:none}
-.probe-help{margin:0;font-size:12px;line-height:1.5;color:var(--text-tertiary)}
-.test-summary{font-size:12px;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+/* 模型可用性面板：数据来自 Mirasim 官方状态页；沿用本页的变量与圆角，只有面板自己的元素在此定义。 */
+.model-status{display:flex;flex-direction:column;gap:10px;padding:15px 16px;border:1px solid var(--border-color);border-radius:14px;background:color-mix(in srgb,var(--bg-primary) 82%,transparent)}
+.model-status h2{margin:0;font-size:18px;font-weight:650}.model-status h2 span{font-size:12px;font-weight:400;color:var(--text-tertiary);margin-left:6px}
+.status-help{margin:0;font-size:12px;line-height:1.5;color:var(--text-tertiary)}
+.status-help a{color:inherit;text-underline-offset:3px}
+.status-cohort{display:flex;flex-direction:column;gap:4px}
+.status-cohort h3{margin:6px 0 2px;font-size:13px;font-weight:650}
+.status-cohort h3 span{font-size:11px;font-weight:400;color:var(--text-tertiary);margin-left:8px}
+.model-status .table-scroll{overflow-x:auto}
+.model-status table{width:100%;border-collapse:collapse;font-size:12px}
+.model-status th,.model-status td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border-color);vertical-align:middle}
+.model-status th{font:700 10px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-tertiary);white-space:nowrap}
+.model-status td:first-child{white-space:nowrap}
+.ms-agent{display:inline-block;margin-right:7px;padding:1px 6px;border-radius:4px;font-size:10.5px;font-weight:600;color:var(--text-secondary);background:var(--bg-tertiary)}
 .model-name{font:600 12px var(--font-mono);overflow-wrap:anywhere}
-.aliases{font-size:11px;color:var(--text-quaternary);margin-top:3px}
-.probe-time{font:11.5px var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
-.response-preview{max-width:26rem;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11.5px;color:var(--text-secondary)}
-.response-preview details summary{cursor:pointer}.response-preview details pre{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:16rem;overflow:auto;font-size:11px}
-.test-badge{display:inline-block;white-space:nowrap;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;background:var(--bg-tertiary);color:var(--text-secondary)}
-.test-badge[data-state=available]{background:color-mix(in srgb,var(--viz-success) 16%,transparent);color:#0f7a53}
-.test-badge[data-state=unavailable]{background:color-mix(in srgb,var(--viz-failure) 14%,transparent);color:var(--viz-failure)}
-.test-badge[data-state=empty]{background:color-mix(in srgb,var(--quota-medium-color) 18%,transparent);color:#8a6207}
-.test-badge[data-state=running]{background:color-mix(in srgb,var(--provider-accent) 16%,transparent);color:var(--provider-accent)}
-@media(max-width:768px){.model-tests table{min-width:640px}}
+.ms-num{font:11.5px var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--text-secondary)}
+.ms-badge{display:inline-block;white-space:nowrap;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;background:var(--bg-tertiary);color:var(--text-secondary)}
+.ms-badge.is-ok{background:color-mix(in srgb,var(--viz-success) 16%,transparent);color:#0f7a53}
+.ms-badge.is-degraded{background:color-mix(in srgb,var(--quota-medium-color) 18%,transparent);color:#8a6207}
+.ms-badge.is-down{background:color-mix(in srgb,var(--viz-failure) 14%,transparent);color:var(--viz-failure)}
+.ms-badge.is-none{background:var(--bg-tertiary);color:var(--text-quaternary)}
+.status-note{margin:2px 0 0;font-size:11px;color:var(--text-quaternary)}
+.status-foot{margin:2px 0 0;font-size:11px;color:var(--text-quaternary)}
+@media(max-width:768px){.model-status table{min-width:720px}}

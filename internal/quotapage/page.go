@@ -32,7 +32,7 @@ const (
 	routePrefix = "/quota/"
 
 	menuLabel       = "Mirasim Quota"
-	menuDescription = "Mirasim account limits as reported by GET /v1/limits."
+	menuDescription = "Mirasim account limits and model availability from the official status page."
 )
 
 // QuotaFetcher reads the normalized limits for one credential. quota.Provider
@@ -56,10 +56,8 @@ type HostServices interface {
 // CPA runs on each config apply; only a real plugin reload, a new process,
 // changes it.
 type Page struct {
-	fetcher  QuotaFetcher
-	segment  string
-	services ProbeServices
-	probes   *probeStore
+	fetcher QuotaFetcher
+	segment string
 }
 
 // processSegment is generated once for the process, not once per Page: CPA
@@ -67,16 +65,9 @@ type Page struct {
 // would move the page's URL out from under a panel iframe that is already open.
 var processSegment = strings.ToLower(rand.Text())
 
-// New builds the page. Probe services are optional: without them the page
-// renders quota only and never publishes the model-availability panel, because
-// running a probe needs the host's model and executor services.
-func New(fetcher QuotaFetcher, services ...ProbeServices) *Page {
-	p := &Page{fetcher: fetcher, segment: processSegment}
-	if len(services) > 0 {
-		p.services = services[0]
-		p.probes = newProbeStore()
-	}
-	return p
+// New builds the page.
+func New(fetcher QuotaFetcher) *Page {
+	return &Page{fetcher: fetcher, segment: processSegment}
 }
 
 // Resource is the route declaration the host turns into a menu entry. The path
@@ -104,12 +95,11 @@ func (p *Page) Owns(path string) bool {
 	return subtle.ConstantTimeCompare([]byte(path[idx+len(routePrefix):]), []byte(p.segment)) == 1
 }
 
-// Serve renders the quota page, or answers a model-availability probe when the
-// request carries the page's action parameter. Reading limits needs the host
-// callbacks, so a request that reaches the handler without them answers 503
-// rather than claiming the account has no limits. A credential whose limits
-// cannot be read renders as unavailable on an otherwise successful page; only a
-// request that addresses something other than this page answers 404.
+// Serve renders the quota page. Reading limits needs the host callbacks, so a
+// request that reaches the handler without them answers 503 rather than
+// claiming the account has no limits. A credential whose limits cannot be
+// read renders as unavailable on an otherwise successful page; only a request
+// that addresses something other than this page answers 404.
 func (p *Page) Serve(ctx context.Context, req pluginapi.ManagementRequest, host HostServices) (pluginapi.ManagementResponse, error) {
 	if !strings.EqualFold(req.Method, http.MethodGet) {
 		return renderResponse(http.StatusNotFound, pageView{Problem: problemNotFound})
@@ -120,9 +110,6 @@ func (p *Page) Serve(ctx context.Context, req pluginapi.ManagementRequest, host 
 	client := host.HTTPClient()
 	if client == nil {
 		return renderResponse(http.StatusServiceUnavailable, pageView{Problem: problemNoCallbacks})
-	}
-	if req.Query.Get("action") != "" {
-		return p.serveProbe(ctx, req, host)
 	}
 	return renderResponse(http.StatusOK, p.buildView(ctx, host, client))
 }
