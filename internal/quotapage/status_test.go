@@ -273,6 +273,9 @@ func TestPageRendersTheStatusPanelNextToQuota(t *testing.T) {
 			t.Fatalf("page does not contain %q:\n%s", want, body)
 		}
 	}
+	if strings.Index(body, `class="cards"`) > strings.Index(body, `id="model-status"`) {
+		t.Fatalf("model status panel should render after quota cards:\n%s", body)
+	}
 }
 
 func TestPageStillRendersQuotaWhenStatusFetchFails(t *testing.T) {
