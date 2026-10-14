@@ -106,6 +106,8 @@ docker exec -it <容器名> ./CLIProxyAPI -config <配置文件> --mirasim-login
 
 Gemini 3.1 Pro 使用 `gemini-3.1-pro-preview`，通过 Mirasim 的 Messages 接口调用，也接受 CPA 的 OpenAI Chat、Responses 和 Gemini 请求格式。思考档位提供 `off`、`minimal`、`low`、`medium`、`high`，按官方集成使用 token 预算；已有的原生 Messages 预算会保留。
 
+向 Gemini、DeepSeek、GLM、Kimi 转发请求时，插件会移除系统提示词中 Claude Code 专用的 `x-anthropic-billing-header:` 计费行，避免每轮变化的指纹破坏前缀缓存复用；同一文本块中的后续指令、其他系统块、工具和缓存标记会保留。Claude 的身份信息和 GPT 的现有转换逻辑不变。缓存是否命中仍由上游决定，插件不估算或伪造命中量。
+
 已知上下文至少 100 万 token 的 Claude 还可以加 `[1m]`，例如 `claude-sonnet-5-5[1m](high)`。转发前会去掉这两个后缀，真实模型名不变。
 
 账号目录含有 GPT 时，CPA 还会列出 `gpt-image-*`。这些是路由别名，账号能否生图由中继决定。`/v1/images/generations` 和 `/v1/images/edits` 会转到 Mirasim，也包括 Codex 的 `/backend-api/codex/images/*`。Codex 压缩请求走 `/v1/responses/compact`，别名是 `/backend-api/codex/responses/compact`。

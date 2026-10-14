@@ -582,7 +582,7 @@ func normalizeBody(body []byte, model string, stream bool, wire sdktranslator.Fo
 	if errMarshal != nil {
 		return nil, fmt.Errorf("encode translated Mirasim request: %w", errMarshal)
 	}
-	return updated, nil
+	return normalizeMessagesAttribution(updated, normalizeModel(model)), nil
 }
 
 func requestHeaders(req pluginapi.ExecutorRequest, wire sdktranslator.Format) http.Header {
@@ -635,6 +635,7 @@ func normalizeHTTPRequestBody(body []byte, model string, wire sdktranslator.Form
 	if errMarshal != nil {
 		return nil, fmt.Errorf("encode Mirasim HTTP request: %w", errMarshal)
 	}
+	updated = normalizeMessagesAttribution(updated, parsedModel.ModelName)
 	if parsedModel.HasConfig {
 		updated, errApply := thinkingpkg.ApplyForWireWithShape(updated, parsedModel.ModelName, wire.String(), parsedModel.Config, shape)
 		if errApply != nil {
