@@ -122,6 +122,7 @@
     const now = Date.now();
     document.querySelectorAll('time[data-until]').forEach(t => { const at = Date.parse(t.dateTime); if (Number.isFinite(at)) t.textContent = humanize((at - now) / 1000); });
     document.querySelectorAll('time[data-plan-exp]').forEach(t => { const at = Date.parse(t.dateTime); if (Number.isFinite(at)) t.textContent = dateText(at) + ' ' + timeText(at); });
+    document.querySelectorAll('time[data-credit-exp]').forEach(t => { const at = Date.parse(t.dateTime); if (Number.isFinite(at)) t.textContent = new Date(at).toLocaleDateString('zh-CN', {month: 'long', day: 'numeric'}); });
     if (boxes.length) renderTimelines(now);
   }
   // 模型可用性整块的折叠状态跨刷新保持：默认展开，收过一次就一直收着。

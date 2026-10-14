@@ -182,6 +182,7 @@ func Normalize(storage credentials.Storage, snapshot mirasim.QuotaSnapshot) plug
 		}
 		account = append(account, bucket)
 		response.Summary = append(response.Summary, metricFromWindow(window))
+		response.Summary = append(response.Summary, platformCreditMetrics(window)...)
 	}
 	if len(account) > 0 {
 		response.Groups = append(response.Groups, pluginapi.QuotaGroup{DisplayName: accountGroupName, Buckets: account})

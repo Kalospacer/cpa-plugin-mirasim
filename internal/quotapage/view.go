@@ -47,6 +47,7 @@ type accountView struct {
 	PlanExpires string
 	PlanDays    string
 	ResetCards  string
+	Credit      *platformCreditView
 	Groups      []limitGroupView
 	Others      []groupView
 	Unavailable bool
@@ -172,6 +173,7 @@ func (p *Page) accountView(ctx context.Context, host HostServices, client plugin
 			account.Plan = plan
 		}
 	}
+	account.Credit = platformCreditFromResponse(response, glance.PlanExpiresAt)
 	// 每张可用重置卡对应一次主动重置；没有这项指标说明查卡失败或中转不支持，保持「—」。
 	for _, metric := range response.Summary {
 		if metric.Key == quota.ResetCardsMetricKey {
@@ -196,14 +198,18 @@ func (p *Page) accountView(ctx context.Context, host HostServices, client plugin
 			members := make([]string, 0, len(group.Buckets))
 			for _, bucket := range group.Buckets {
 				members = append(members, strings.TrimSpace(bucket.Window))
-				rendered.Bars = append(rendered.Bars, limitBarFromBucket(bucket, name == accountGroupName))
+				if account.Credit == nil || name != accountGroupName || bucket.Window != "30d" {
+					rendered.Bars = append(rendered.Bars, limitBarFromBucket(bucket, name == accountGroupName))
+				}
 				if lane, okLane := laneFromBucket(label, bucket); okLane {
 					lane.key = account.Key
 					lanes = append(lanes, lane)
 				}
 			}
 			rendered.Members = strings.Join(members, ", ")
-			account.Groups = append(account.Groups, rendered)
+			if len(rendered.Bars) > 0 {
+				account.Groups = append(account.Groups, rendered)
+			}
 		default:
 			others := groupView{DisplayName: name}
 			if others.DisplayName == "" {
@@ -226,7 +232,7 @@ func (p *Page) accountView(ctx context.Context, host HostServices, client plugin
 			account.Others = append(account.Others, others)
 		}
 	}
-	account.Empty = len(account.Groups) == 0 && len(account.Others) == 0
+	account.Empty = account.Credit == nil && len(account.Groups) == 0 && len(account.Others) == 0
 	return account, lanes
 }
 
